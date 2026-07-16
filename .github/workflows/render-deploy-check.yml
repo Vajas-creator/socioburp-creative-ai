@@ -1,0 +1,88 @@
+name: Render deploy check
+
+# Render's Blueprint (render.yaml) auto-deploys both services whenever the
+# connected branch is pushed — no GitHub Action is required to trigger a
+# deploy. This workflow is the pre-deploy gate: it validates render.yaml
+# itself, and its "trigger" job optionally pings Render Deploy Hooks (if
+# configured as secrets) purely as a status marker, not to replace Render's
+# native auto-deploy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "render.yaml"
+      - ".github/workflows/render-deploy-check.yml"
+  pull_request:
+    paths:
+      - "render.yaml"
+      - ".github/workflows/render-deploy-check.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate render.yaml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Check render.yaml is well-formed and complete
+        run: |
+          python3 - <<'EOF'
+          import sys
+          import yaml
+
+          with open("render.yaml") as f:
+              config = yaml.safe_load(f)
+
+          services = config.get("services", [])
+          assert services, "render.yaml has no services defined"
+
+          required_fields = ["type", "name", "env", "buildCommand", "startCommand", "healthCheckPath"]
+          expected_names = {"socioburp-creative-ai", "socioburp-web"}
+          seen_names = set()
+
+          for service in services:
+              missing = [f for f in required_fields if f not in service]
+              if missing:
+                  sys.exit(f"Service '{service.get('name', '?')}' is missing fields: {missing}")
+              seen_names.add(service["name"])
+              print(f"OK: {service['name']} ({service['env']}) -> {service['healthCheckPath']}")
+
+          missing_services = expected_names - seen_names
+          if missing_services:
+              sys.exit(f"render.yaml is missing expected service(s): {missing_services}")
+
+          print("render.yaml is valid and complete.")
+          EOF
+
+  # Informational only — pings Render Deploy Hooks if you've added them as
+  # repo secrets (Render dashboard -> service -> Settings -> Deploy Hook).
+  # Safe to leave secrets unset: Render's Blueprint auto-deploy already
+  # covers deploys on push, so this step just no-ops with a log message.
+  notify:
+    name: Notify Render (optional deploy hook ping)
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping configured deploy hooks
+        env:
+          BACKEND_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_BACKEND }}
+          WEB_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_WEB }}
+        run: |
+          ping_hook() {
+            name="$1"
+            url="$2"
+            if [ -n "$url" ]; then
+              echo "Pinging Render deploy hook for $name..."
+              curl -fsS -X POST "$url" -o /dev/null && echo "$name: deploy hook pinged OK."
+            else
+              echo "$name: no deploy hook secret configured — skipping (Render's Blueprint auto-deploy already handles this push)."
+            fi
+          }
+          ping_hook "backend (socioburp-creative-ai)" "$BACKEND_HOOK"
+          ping_hook "web (socioburp-web)" "$WEB_HOOK"

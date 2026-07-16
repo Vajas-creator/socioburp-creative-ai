@@ -51,6 +51,21 @@ If `SMTP_*` isn't configured, `forgot-password` still works: the reset
 link is logged to the server console instead of emailed, so you can test
 the full flow locally without a mail provider.
 
+### Linting, type checking, and build
+
+```bash
+npm run lint        # eslint
+npm run typecheck   # tsc --noEmit
+npm run build       # production build (next build)
+```
+
+`npx prisma generate` must run before `typecheck`/`build` in a fresh
+checkout (it writes the generated client to `src/generated/prisma`, which
+is gitignored). `npm run dev`/`build` don't need `DATABASE_URL` to be a
+reachable database to succeed — `src/lib/prisma.ts` only connects lazily,
+on first actual query — but `prisma migrate deploy`/`dev` do need a real
+one.
+
 ## Environment variables
 
 See `.env.example` for the full list. Required:
@@ -66,10 +81,13 @@ Optional (for real emails):
 
 - **Access token**: JWT, 15 min TTL, httpOnly cookie (`sb_access_token`), scoped to `/`.
 - **Refresh token**: random 256-bit token, 30 day TTL, httpOnly cookie
-  (`sb_refresh_token`) scoped to `/api/auth`. Only its SHA-256 hash is
-  stored in Postgres. Rotated on every use (old token revoked, new one
-  issued); reuse of an already-revoked token revokes the user's entire
-  session chain as a theft signal.
+  (`sb_refresh_token`), also scoped to `/` (not just `/api/auth`) so
+  `src/proxy.ts` receives it on `/dashboard/**` requests and can silently
+  refresh an expired access token; httpOnly already prevents JS from
+  reading it regardless of path. Only its SHA-256 hash is stored in
+  Postgres. Rotated on every use (old token revoked, new one issued);
+  reuse of an already-revoked token revokes the user's entire session
+  chain as a theft signal.
 - **Route protection**: `src/proxy.ts` (Next.js 16 renamed `middleware.ts`
   to `proxy.ts`) guards `/dashboard/**`, verifying the access token and
   silently refreshing it via `/api/auth/refresh` when expired but the
@@ -96,9 +114,40 @@ Optional (for real emails):
 | `/api/auth/me`                  | GET    | Current user from the access token        |
 | `/api/dashboard`                | GET    | Role-aware dashboard data (protected)     |
 
+## CI
+
+`../.github/workflows/frontend.yml` runs on every push/PR touching `web/`:
+
+- **lint** — `eslint`
+- **typecheck** — `tsc --noEmit`
+- **build** — spins up a real Postgres service container, runs
+  `prisma migrate deploy` against it, then `next build` — the same
+  sequence Render's `buildCommand` runs (see below)
+
+There's no frontend test suite yet, so no "test" job is defined — add one
+(e.g. Vitest/Playwright) and a matching CI job when tests are introduced.
+
+## Deploy to Render
+
+This service is defined in `../render.yaml` as `socioburp-web`, alongside
+the FastAPI backend as one Render Blueprint. See the root `README.md`'s
+[Deploy to Render](../README.md#deploy-to-render) section for the full
+walkthrough. In short:
+
+- `buildCommand`: `npm ci && npx prisma generate && npx prisma migrate deploy && npm run build`
+- `startCommand`: `npm run start`
+- `healthCheckPath`: `/login` (a static 200 page — the app's own `/`
+  redirects based on auth state, which isn't health-check-friendly)
+- Required env vars in the Render dashboard (all `sync: false` in
+  `render.yaml`, so Render won't set them for you): `DATABASE_URL`,
+  `JWT_SECRET`, `APP_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+  `SMTP_PASS`, `EMAIL_FROM`
+
 ## Production checklist
 
-- Run `npx prisma migrate deploy` against production `DATABASE_URL` as part of your deploy step.
+- Migrations run automatically on every Render deploy (`buildCommand`
+  includes `prisma migrate deploy`) — no manual step needed here, unlike
+  the FastAPI backend's Alembic migrations.
 - Set `JWT_SECRET` and `DATABASE_URL` as real secrets in your host's env config — never commit `.env`.
 - Configure real SMTP credentials so password resets actually deliver.
 - Deployed behind HTTPS (cookies are marked `secure` in production).

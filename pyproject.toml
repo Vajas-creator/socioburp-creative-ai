@@ -1,0 +1,25 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_configs = true
+
+# SQLAlchemy's classic Column()-style declarative models (as opposed to the
+# newer Mapped[]-annotated style) don't carry enough type info for mypy to
+# narrow Column[UUID] to UUID at the instance level, or to infer
+# relationship() cardinality without redundant annotations. These are known
+# false positives for this ORM style, not real bugs — scoped here rather
+# than disabled globally so real arg-type errors elsewhere still surface.
+[[tool.mypy.overrides]]
+module = "app.models"
+disable_error_code = ["valid-type", "misc"]
+
+[[tool.mypy.overrides]]
+module = ["app.router", "app.credits", "app.onboarding"]
+disable_error_code = ["arg-type"]

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Env files (never commit real secrets)
+.env
+.env.local
+
+# Local smoke-test SQLite DB
+test_smoke.db
+
+# OS
+.DS_Store
+
+# web/ (Next.js app) has its own .gitignore for node_modules, .next, etc.

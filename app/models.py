@@ -3,7 +3,6 @@ ORM models. Mirrors the schema in migrations/versions/0001_initial.py —
 if you change one, change the other.
 """
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Column, String, Integer, Text, ForeignKey, TIMESTAMP, func

@@ -1,10 +1,12 @@
 services:
+  # FastAPI WhatsApp bot backend — see app/ and README.md.
   - type: web
     name: socioburp-creative-ai
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.10
@@ -27,4 +29,35 @@ services:
       - key: R2_BUCKET
         sync: false
       - key: R2_PUBLIC_BASE_URL
+        sync: false
+
+  # Next.js auth system + dashboard — see web/ and web/README.md. Shares
+  # the same Postgres instance as the FastAPI service above (own tables,
+  # prefixed auth_*), so DATABASE_URL should point at the same database.
+  - type: web
+    name: socioburp-web
+    env: node
+    plan: free
+    rootDir: web
+    buildCommand: "npm ci && npx prisma generate && npx prisma migrate deploy && npm run build"
+    startCommand: "npm run start"
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: 22.22.2
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: EMAIL_FROM
         sync: false
