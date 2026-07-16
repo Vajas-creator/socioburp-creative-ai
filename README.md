@@ -5,6 +5,14 @@ WhatsApp bot backend: webhook receive/send, message router, and the full
 with a credit ledger and signup bonus. Generation itself is stubbed —
 that's the Week 2 build.
 
+## Web dashboard & auth (`web/`)
+
+`web/` is a separate Next.js (App Router + TypeScript) app providing login,
+signup, forgot/reset password, JWT sessions, and a role-protected
+dashboard (Admin / Team Member / Client). It can share this repo's
+Postgres instance without touching the bot's tables — see `web/README.md`
+for setup.
+
 ## What's included
 
 - `app/main.py` — FastAPI app entry point
