@@ -25,6 +25,9 @@ This app owns three tables in your Postgres database, all prefixed
 - `auth_users` — id, email, password_hash, name, role, timestamps
 - `auth_refresh_tokens` — hashed refresh tokens, rotation chain, revocation
 - `auth_password_reset_tokens` — hashed, single-use, time-limited reset tokens
+- `web_client_onboarding` — one row per user: the 6-step client onboarding
+  wizard's data (business info, contacts, marketing goals, social accounts,
+  advertising), progress, and completion timestamp
 
 `role` is a Postgres enum: `ADMIN`, `TEAM_MEMBER`, `CLIENT`. New
 self-service signups always get `CLIENT` — promote a user to `TEAM_MEMBER`
@@ -113,6 +116,21 @@ Optional (for real emails):
 | `/api/auth/reset-password`      | POST   | Consume reset token, set new password     |
 | `/api/auth/me`                  | GET    | Current user from the access token        |
 | `/api/dashboard`                | GET    | Role-aware dashboard data (protected)     |
+| `/api/onboarding`               | GET    | Current user's onboarding record (protected) |
+| `/api/onboarding/steps/[1-5]`   | PUT    | Save one wizard step, validated per-step (protected) |
+| `/api/onboarding/submit`        | POST   | Finish onboarding; re-validates required steps (protected) |
+
+## Client onboarding
+
+`/dashboard/onboarding` (authenticated, guarded like the rest of
+`/dashboard/**`) is a 6-step wizard: Business Information → Contact
+Information → Marketing Goals → Social Accounts → Advertising → Review &
+Finish. Each step is saved to Postgres as the user moves forward, so
+progress survives leaving mid-way; the review step links back into any
+section, and the whole wizard stays editable after completion (the
+dashboard card switches to "Edit profile"). Steps 1–3 have required
+fields; 4–5 are optional. Validation lives in `src/lib/onboarding.ts` and
+runs both client-side (inline errors) and server-side (same zod schemas).
 
 ## CI
 

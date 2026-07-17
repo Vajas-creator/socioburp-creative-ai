@@ -35,6 +35,7 @@ model User {
 
   refreshTokens       RefreshToken[]
   passwordResetTokens PasswordResetToken[]
+  onboarding          ClientOnboarding?
 
   @@map("auth_users")
 }
@@ -53,6 +54,59 @@ model RefreshToken {
 
   @@index([userId])
   @@map("auth_refresh_tokens")
+}
+
+// One onboarding record per user, filled in across the 6-step wizard.
+// Steps are saved incrementally, so every step field is nullable at the
+// database level — per-step required fields are enforced by the zod
+// schemas in src/lib/onboarding.ts at save time. Prefixed web_ (not
+// auth_) since it's app data, not auth data, but the same
+// no-collision-with-the-bot's-tables rule applies.
+model ClientOnboarding {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @unique @map("user_id") @db.Uuid
+
+  // Step 1 — Business information
+  businessName        String? @map("business_name")
+  industry            String?
+  businessDescription String? @map("business_description")
+  website             String?
+  businessAddress     String? @map("business_address")
+  timeZone            String? @map("time_zone")
+
+  // Step 2 — Contact information
+  ownerName      String? @map("owner_name")
+  contactEmail   String? @map("contact_email")
+  phoneNumber    String? @map("phone_number")
+  whatsappNumber String? @map("whatsapp_number")
+
+  // Step 3 — Marketing goals (values from MARKETING_GOALS in src/lib/onboarding.ts)
+  marketingGoals String[] @default([]) @map("marketing_goals")
+  customGoal     String?  @map("custom_goal")
+
+  // Step 4 — Social accounts
+  facebookUrl       String? @map("facebook_url")
+  instagramUrl      String? @map("instagram_url")
+  linkedinUrl       String? @map("linkedin_url")
+  youtubeUrl        String? @map("youtube_url")
+  googleBusinessUrl String? @map("google_business_url")
+  twitterUrl        String? @map("twitter_url")
+
+  // Step 5 — Advertising
+  googleAdsAccountId String?  @map("google_ads_account_id")
+  metaAdsAccountId   String?  @map("meta_ads_account_id")
+  monthlyBudget      Int?     @map("monthly_budget")
+  targetLocations    String[] @default([]) @map("target_locations")
+
+  // Progress: highest step saved so far (1-5); completedAt set on final submit.
+  lastCompletedStep Int       @default(0) @map("last_completed_step")
+  completedAt       DateTime? @map("completed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("web_client_onboarding")
 }
 
 model PasswordResetToken {

@@ -1,12 +1,20 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/session";
 import { getDashboardData } from "@/lib/dashboard-data";
+import { prisma } from "@/lib/prisma";
 
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?next=/dashboard");
 
-  const data = await getDashboardData(user);
+  const [data, onboarding] = await Promise.all([
+    getDashboardData(user),
+    prisma.clientOnboarding.findUnique({
+      where: { userId: user.sub },
+      select: { lastCompletedStep: true, completedAt: true },
+    }),
+  ]);
 
   return (
     <div>
@@ -16,6 +24,31 @@ export default async function DashboardPage() {
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
         You&apos;re signed in as {user.email}.
       </p>
+
+      <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-5 dark:border-indigo-900 dark:bg-indigo-950 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">
+            Client onboarding
+          </h2>
+          <p className="mt-0.5 text-sm text-indigo-700 dark:text-indigo-300">
+            {onboarding?.completedAt
+              ? "Your business profile is complete. You can update it anytime."
+              : onboarding
+                ? `In progress — ${onboarding.lastCompletedStep} of 5 steps saved.`
+                : "Set up your business profile so SocioBurp can work for you."}
+          </p>
+        </div>
+        <Link
+          href="/dashboard/onboarding"
+          className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-center text-sm font-semibold text-white transition hover:bg-indigo-500"
+        >
+          {onboarding?.completedAt
+            ? "Edit profile"
+            : onboarding
+              ? "Continue setup"
+              : "Start onboarding"}
+        </Link>
+      </div>
 
       {data.role === "ADMIN" ? (
         <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">

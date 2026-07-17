@@ -1,7 +1,11 @@
-/** Thin fetch wrapper for calling our own /api/auth/* routes from client components. */
-export async function postJson<T>(path: string, body: unknown): Promise<T> {
+/** Thin fetch wrapper for calling our own API routes from client components. */
+async function requestJson<T>(
+  method: "POST" | "PUT",
+  path: string,
+  body: unknown
+): Promise<T> {
   const res = await fetch(path, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     credentials: "include",
@@ -12,8 +16,26 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     const message =
       typeof data?.error === "string" ? data.error : "Something went wrong.";
-    throw new Error(message);
+    throw new ApiError(message, data?.details, data?.incompleteSteps);
   }
 
   return data as T;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public details?: Record<string, string[]>,
+    public incompleteSteps?: string[]
+  ) {
+    super(message);
+  }
+}
+
+export function postJson<T>(path: string, body: unknown): Promise<T> {
+  return requestJson<T>("POST", path, body);
+}
+
+export function putJson<T>(path: string, body: unknown): Promise<T> {
+  return requestJson<T>("PUT", path, body);
 }
