@@ -1,0 +1,114 @@
+name: Backend (FastAPI)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "migrations/**"
+      - "requirements*.txt"
+      - "alembic.ini"
+      - "test_smoke.py"
+      - "pyproject.toml"
+      - "runtime.txt"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "migrations/**"
+      - "requirements*.txt"
+      - "alembic.ini"
+      - "test_smoke.py"
+      - "pyproject.toml"
+      - "runtime.txt"
+      - ".github/workflows/backend.yml"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12.10"
+  # Dummy values so app/config.py's required-env-var checks pass in CI.
+  # No real secrets are needed to lint, type-check, or boot the app.
+  WA_VERIFY_TOKEN: ci-verify-token
+  WA_ACCESS_TOKEN: ci-access-token
+  WA_PHONE_NUMBER_ID: ci-phone-id
+  ANTHROPIC_API_KEY: ci-anthropic-key
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+      - run: pip install -r requirements-dev.txt
+      - run: mypy app/
+
+  build:
+    name: Build (install + migrate + boot)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: socioburp_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/socioburp_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+      - name: Install dependencies (same as Render's buildCommand)
+        run: pip install -r requirements.txt
+      - name: Apply Alembic migrations against a real Postgres
+        run: alembic upgrade head
+      - name: Boot the app and hit the health check
+        run: |
+          python - <<'EOF'
+          from fastapi.testclient import TestClient
+          from app.main import app
+
+          with TestClient(app) as client:
+              response = client.get("/")
+              assert response.status_code == 200, response.text
+              assert response.json()["status"] == "ok"
+          print("Health check OK.")
+          EOF
+
+  test:
+    name: Test (smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Run onboarding flow smoke test (SQLite, no external APIs)
+        run: python test_smoke.py

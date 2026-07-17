@@ -21,9 +21,8 @@ db_module.SessionLocal = sessionmaker(bind=db_module.engine)
 # JSONB is Postgres-only; swap to generic JSON so this smoke test can run on
 # SQLite. Production (Render/Neon) uses real Postgres, so JSONB is used there
 # via the actual models.py — this patch only affects this local test run.
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import JSON
-from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.dialects.postgresql import JSONB  # noqa: E402
+from sqlalchemy.ext.compiler import compiles  # noqa: E402
 
 
 @compiles(JSONB, "sqlite")
@@ -31,7 +30,7 @@ def _compile_jsonb_sqlite(type_, compiler, **kw):
     return "JSON"
 
 
-import app.models  # noqa: E402  register models on Base
+import app.models  # noqa: E402,F401  register models on Base
 db_module.Base.metadata.create_all(bind=db_module.engine)
 
 from app.whatsapp import client as wa_client  # noqa: E402
