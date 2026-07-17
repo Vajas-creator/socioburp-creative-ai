@@ -51,9 +51,11 @@ async def handle_message(msg: IncomingMessage):
             await payments.send_topup_options(biz_id, msg.sender)
             return
 
-        if text_lower.startswith("pack_"):
-            # button reply from the topup options
-            await payments.handle_pack_selection(biz_id, msg.sender, text_lower)
+        if msg.button_id and msg.button_id.startswith("pack_"):
+            # button reply from the topup options — must check button_id,
+            # not text (text is the button's display title, e.g. "50 credits",
+            # which never starts with "pack_")
+            await payments.handle_pack_selection(biz_id, msg.sender, msg.button_id)
             return
 
         if text_lower == "history":

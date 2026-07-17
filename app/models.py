@@ -76,7 +76,7 @@ class CreditLedger(Base):
     business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), index=True)
     delta = Column(Integer, nullable=False)  # +200 top-up, -1 generation
     reason = Column(String(50), nullable=False)  # signup_bonus / generation / topup / refund
-    ref_id = Column(UUID(as_uuid=True), nullable=True)  # generation id or payment id
+    ref_id = Column(String(64), nullable=True)  # generation id (as str) or Razorpay payment_link id
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

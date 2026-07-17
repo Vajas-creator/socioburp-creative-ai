@@ -42,4 +42,4 @@ def charge_for_generation(business_id: uuid.UUID, generation_id: uuid.UUID, amou
     for the common case where the caller doesn't already have a session open.
     """
     with get_session() as db:
-        add_credits(db, business_id, -amount, reason="generation", ref_id=generation_id)
+        add_credits(db, business_id, -amount, reason="generation", ref_id=str(generation_id))
