@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# Local smoke-test databases (test_smoke*.py create these)
+*.db
+
+# Secrets — never commit real env values
+.env
