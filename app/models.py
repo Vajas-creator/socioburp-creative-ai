@@ -85,6 +85,7 @@ class ConversationState(Base):
 
     business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), primary_key=True)
     last_generation_id = Column(UUID(as_uuid=True), nullable=True)
+    pending_proposal = Column(Text, nullable=True)
     context = Column(JSONB, default=dict)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

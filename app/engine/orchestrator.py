@@ -12,12 +12,28 @@ Week 2 orchestrator — the main event. Wires together:
 Revisions ("make it more premium") reuse the original built_prompt as a
 starting point rather than building from scratch, and link back via parent_id.
 
+Concept proposal step (runs BEFORE the pipeline above):
+  1. If a proposal is already pending for this business, the incoming message
+     is interpreted as a reply to THAT proposal (confirm or adjust) — intent
+     classification is skipped entirely, since we already know what's going on.
+  2. Otherwise, classify intent as before. QUESTION/OTHER unchanged. REVISE
+     unchanged (operates on the last completed generation).
+  3. For a fresh GENERATE with no pending proposal: ask concept_proposal.decide()
+     whether this needs a proposal first. If yes, send the proposal and stop —
+     no image generation, no charge, nothing produced yet. If the request was
+     already specific enough, skip straight to generation as before.
+
+pending_proposal is stored as a JSON string on ConversationState containing
+both the client-facing proposal_text and the internal concept_brief (used to
+actually build the creative once confirmed) — one text column, two values.
+
 IMPORTANT: business/profile are read once inside a `with get_session()`
 block and immediately converted to a plain BusinessContext. Every function
 below that point (prompt_builder, caption, etc.) takes that plain context —
 never a live ORM object — because the session closes before those (slow,
 async, external-API-calling) functions run. See app/engine/context.py.
 """
+import json
 import logging
 import uuid
 
@@ -32,6 +48,7 @@ from app.credits import charge_for_generation, get_balance
 from app.config import settings
 from app.engine.context import BusinessContext
 from app.engine import intent as intent_engine
+from app.engine import concept_proposal
 from app.engine import prompt_builder
 from app.engine import image_gen
 from app.engine import compositor
@@ -78,6 +95,7 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             db.add(convo)
             db.flush()
         last_generation_id = convo.last_generation_id
+        pending_raw = convo.pending_proposal
 
         ctx = BusinessContext(
             name=business.name,
@@ -101,7 +119,28 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         )
         return
 
-    # --- Classify intent ---
+    # --- Branch 1: a proposal is already pending — interpret this reply ---
+    if pending_raw:
+        pending = json.loads(pending_raw)
+        result = await concept_proposal.interpret_reply(ctx, pending["proposal_text"], msg.text)
+
+        if result["classification"] == "ADJUST":
+            new_pending = {"proposal_text": result["proposal_text"], "concept_brief": result["concept_brief"]}
+            with get_session() as db:
+                convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+                convo.pending_proposal = json.dumps(new_pending)
+            await send_text(phone, result["proposal_text"])
+            return  # no generation yet, no charge — still discussing
+
+        # CONFIRM — proceed to generation using the previously agreed concept
+        brief = pending["concept_brief"]
+        with get_session() as db:
+            convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+            convo.pending_proposal = None
+        await _run_generation(business_id, phone, ctx, brief, msg.text, last_generation_id, is_revision=False)
+        return
+
+    # --- Branch 2: no pending proposal — classify intent as before ---
     result = await intent_engine.classify(msg.text)
     user_intent = result["intent"]
     brief = result["brief"]
@@ -118,6 +157,32 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
 
     is_revision = user_intent == "REVISE" and last_generation_id is not None
 
+    if is_revision:
+        # Existing revision path, unchanged from Week 2 — feedback on an
+        # already-completed generation, not a new concept discussion.
+        await _run_generation(business_id, phone, ctx, brief, msg.text, last_generation_id, is_revision=True)
+        return
+
+    # --- Branch 3: fresh GENERATE request — decide whether to propose first ---
+    decision = await concept_proposal.decide(ctx, brief)
+
+    if decision["decision"] == "NEEDS_PROPOSAL":
+        pending = {"proposal_text": decision["proposal_text"], "concept_brief": decision["concept_brief"]}
+        with get_session() as db:
+            convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+            convo.pending_proposal = json.dumps(pending)
+        await send_text(phone, decision["proposal_text"])
+        return  # no generation yet, no charge — proposing a direction first
+
+    # SPECIFIC_ENOUGH — skip the proposal, go straight to generation
+    await _run_generation(business_id, phone, ctx, decision["brief"], msg.text, last_generation_id, is_revision=False)
+
+
+async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision):
+    """
+    The actual production pipeline (Week 2, unchanged): prompt build -> image
+    gen -> quality check -> composite -> caption -> save -> charge -> deliver.
+    """
     await send_text(phone, "🎨 Creating your design... (~30 seconds)")
 
     try:
@@ -180,7 +245,7 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         with get_session() as db:
             gen_row = Generation(
                 business_id=business_id,
-                user_message=msg.text,
+                user_message=user_message,
                 built_prompt=image_prompt,
                 quality_score=scored["best_score"],
                 status="generating",
