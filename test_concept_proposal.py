@@ -8,6 +8,10 @@ import asyncio
 import os
 
 sys.path.insert(0, ".")
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test_concept.db")
+os.environ.setdefault("WA_VERIFY_TOKEN", "fake")
+os.environ.setdefault("WA_ACCESS_TOKEN", "fake")
+os.environ.setdefault("WA_PHONE_NUMBER_ID", "fake")
 os.environ["ANTHROPIC_API_KEY"] = "fake"
 
 from app import db as db_module
@@ -16,6 +20,15 @@ from sqlalchemy.orm import sessionmaker
 
 db_module.engine = create_engine("sqlite:///./test_concept.db")
 db_module.SessionLocal = sessionmaker(bind=db_module.engine)
+
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
 
 import app.models  # noqa: E402
 db_module.Base.metadata.create_all(bind=db_module.engine)
@@ -31,6 +44,18 @@ wa_client.send_text = fake_send_text
 
 from app.engine import orchestrator  # noqa: E402
 orchestrator.send_text = fake_send_text
+
+# --- Stub the production pipeline — this test is about the proposal step's
+# control flow (propose vs adjust vs confirm vs skip), not the pipeline ---
+pipeline_runs = []
+
+
+async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision):
+    pipeline_runs.append(brief)
+    print(f"[GENERATION PIPELINE] brief={brief!r} revision={is_revision}")
+
+
+orchestrator._run_generation = fake_run_generation
 
 # --- Mock intent classification ---
 from app.engine import intent as intent_engine  # noqa: E402
@@ -97,6 +122,7 @@ async def run():
         assert convo.pending_proposal is not None, "FAIL: no pending proposal stored!"
         assert len(sent) == 1, f"FAIL: expected 1 message sent, got {len(sent)}"
         assert "gold tones" in sent[0], "FAIL: proposal text not sent!"
+        assert len(pipeline_runs) == 0, "FAIL: generation pipeline ran during proposal!"
     print("PASS: proposal stored, sent to client, NO generation ran (no pipeline log above)\n")
 
     print("=" * 60)
@@ -108,6 +134,7 @@ async def run():
         convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
         assert convo.pending_proposal is not None, "FAIL: proposal should still be pending after ADJUST!"
         assert "updated direction" in sent[0], "FAIL: adjusted proposal not sent!"
+        assert len(pipeline_runs) == 0, "FAIL: generation pipeline ran during ADJUST!"
     print("PASS: still pending, revised proposal sent, still NO generation ran\n")
 
     print("=" * 60)
@@ -118,6 +145,7 @@ async def run():
     with get_session() as db:
         convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
         assert convo.pending_proposal is None, "FAIL: pending_proposal should be cleared after CONFIRM!"
+        assert len(pipeline_runs) == 1, f"FAIL: pipeline should have run once, ran {len(pipeline_runs)} times!"
     print("PASS: pending cleared, generation pipeline ran (see [GENERATION PIPELINE] log above)\n")
 
     print("=" * 60)
@@ -130,6 +158,7 @@ async def run():
         convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
         assert convo.pending_proposal is None, "FAIL: specific request should never set a pending proposal!"
         assert len(sent) == 0, f"FAIL: no WhatsApp text should be sent for a direct generation, got {sent}"
+        assert len(pipeline_runs) == 2, f"FAIL: pipeline should have run directly, ran {len(pipeline_runs)} times total!"
     print("PASS: went straight to generation pipeline, no proposal step, no extra message\n")
 
     print("ALL TESTS PASSED")
