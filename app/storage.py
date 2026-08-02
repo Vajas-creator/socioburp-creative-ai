@@ -60,3 +60,13 @@ def upload_logo(business_id: uuid.UUID, image_bytes: bytes) -> str:
 def upload_creative(business_id: uuid.UUID, generation_id: uuid.UUID, image_bytes: bytes) -> str:
     key = f"creatives/{business_id}/{generation_id}.png"
     return _upload(key, image_bytes, "image/png")
+
+
+def upload_base_image(business_id: uuid.UUID, generation_id: uuid.UUID, image_bytes: bytes) -> str:
+    """
+    The pre-composite background (creative WITHOUT the logo pasted on).
+    Stored alongside the final creative so a later "move my logo" revision
+    can re-paste at a new position without regenerating the image.
+    """
+    key = f"creatives/{business_id}/{generation_id}_base.png"
+    return _upload(key, image_bytes, "image/png")

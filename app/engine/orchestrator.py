@@ -12,6 +12,14 @@ Week 2 orchestrator — the main event. Wires together:
 Revisions ("make it more premium") reuse the original built_prompt as a
 starting point rather than building from scratch, and link back via parent_id.
 
+Revision fast path (Week 3+): before running the full pipeline on a REVISE,
+revision_classifier.classify() checks whether the request is ONLY a logo move
+("logo top left"). If so, and the parent generation stored its pre-composite
+background (base_image_url), we just re-paste the logo at the new position —
+no prompt build, no image generation, no quality check, zero credits charged.
+If the parent has no base_image_url (older rows, or the base upload failed),
+we fall back to the normal full-regeneration revision path.
+
 Concept proposal step (runs BEFORE the pipeline above):
   1. If a proposal is already pending for this business, the incoming message
      is interpreted as a reply to THAT proposal (confirm or adjust) — intent
@@ -43,11 +51,12 @@ from app.db import get_session
 from app.models import Business, BrandProfile, Generation, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_image
-from app.storage import upload_creative
+from app.storage import upload_creative, upload_base_image
 from app.credits import charge_for_generation, get_balance
 from app.config import settings
 from app.engine.context import BusinessContext
 from app.engine import intent as intent_engine
+from app.engine import revision_classifier
 from app.engine import concept_proposal
 from app.engine import prompt_builder
 from app.engine import image_gen
@@ -158,9 +167,24 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     is_revision = user_intent == "REVISE" and last_generation_id is not None
 
     if is_revision:
-        # Existing revision path, unchanged from Week 2 — feedback on an
-        # already-completed generation, not a new concept discussion.
-        await _run_generation(business_id, phone, ctx, brief, msg.text, last_generation_id, is_revision=True)
+        # Classify the revision first: a pure "move my logo" request is served
+        # from the parent's stored pre-composite background for free, skipping
+        # the whole paid pipeline. Anything else (or anything we can't serve
+        # from the stored base) runs the full revision pipeline as before.
+        rev = await revision_classifier.classify(msg.text)
+
+        if rev["revision_type"] == "LOGO_POSITION":
+            handled = await _recomposite_logo(
+                business_id, phone, ctx, rev["position"], msg.text, last_generation_id,
+            )
+            if handled:
+                return
+            logger.info(
+                "Logo-position fast path unavailable for business=%s (no base image or no logo) "
+                "— falling back to full regeneration", business_id,
+            )
+
+        await _run_generation(business_id, phone, ctx, rev["brief"], msg.text, last_generation_id, is_revision=True)
         return
 
     # --- Branch 3: fresh GENERATE request — decide whether to propose first ---
@@ -176,6 +200,88 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
 
     # SPECIFIC_ENOUGH — skip the proposal, go straight to generation
     await _run_generation(business_id, phone, ctx, decision["brief"], msg.text, last_generation_id, is_revision=False)
+
+
+async def _recomposite_logo(business_id, phone, ctx, position, user_message, parent_id):
+    """
+    Free logo-move revision: re-paste the logo onto the parent generation's
+    stored pre-composite background at the requested position. No prompt
+    build, no image generation, no quality check, no charge.
+
+    Returns True if handled. Returns False when the fast path can't run —
+    parent missing, no stored base image, no logo on file, or a fetch
+    failure — so the caller falls back to the full pipeline.
+    """
+    with get_session() as db:
+        parent = db.query(Generation).filter(Generation.id == parent_id).first()
+        if parent is None or not parent.base_image_url:
+            return False
+        base_image_url = parent.base_image_url
+        parent_prompt = parent.built_prompt
+        parent_caption = parent.caption
+        parent_hashtags = parent.hashtags
+        parent_score = parent.quality_score
+
+    if not ctx.has_logo:
+        return False
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            base_resp = await http_client.get(base_image_url)
+            logo_resp = await http_client.get(ctx.logo_url)
+        if base_resp.status_code != 200 or logo_resp.status_code != 200:
+            return False
+    except Exception:
+        logger.exception("Fetching base image/logo failed for business=%s — falling back", business_id)
+        return False
+
+    composited = compositor.composite_logo(base_resp.content, logo_resp.content, position=position)
+
+    try:
+        with get_session() as db:
+            gen_row = Generation(
+                business_id=business_id,
+                user_message=user_message,
+                built_prompt=parent_prompt,
+                quality_score=parent_score,
+                credits_charged=0,
+                status="generating",
+                parent_id=parent_id,
+                base_image_url=base_image_url,  # carry forward so the logo can be moved again
+            )
+            db.add(gen_row)
+            db.flush()
+            generation_id = gen_row.id
+
+        image_url = upload_creative(business_id, generation_id, composited)
+
+        with get_session() as db:
+            gen_row = db.query(Generation).filter(Generation.id == generation_id).first()
+            gen_row.image_url = image_url
+            gen_row.caption = parent_caption
+            gen_row.hashtags = parent_hashtags
+            gen_row.status = "done"
+
+            convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+            convo.last_generation_id = generation_id
+
+        # Deliberately NO charge_for_generation here — logo moves are free.
+        full_caption = f"{parent_caption}\n\n{parent_hashtags}" if parent_caption else ""
+        await send_image(phone, image_url, caption=full_caption[:1024])
+        await send_text(
+            phone,
+            f"✅ Moved your logo to the {position.replace('-', ' ')} — no credit charged for logo moves!\n\n"
+            f"💳 Credits left: {get_balance(business_id)}",
+        )
+        return True
+
+    except Exception:
+        logger.exception("Logo recomposite failed for business=%s", business_id)
+        await send_text(
+            phone,
+            "Something went wrong moving your logo 🙏 No credits were charged. Please try again.",
+        )
+        return True  # handled (with an error message) — don't run the paid pipeline on top
 
 
 async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision):
@@ -230,6 +336,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                     scored = retry_scored
 
         best_image = candidates[scored["best_index"]]
+        base_image = best_image  # pre-composite background, kept for free logo-move revisions
 
         # --- Composite logo if present ---
         if ctx.has_logo:
@@ -258,9 +365,20 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         image_url = upload_creative(business_id, generation_id, best_image)
         full_caption = f"{cap['caption']}\n\n{cap['hashtags']}"
 
+        # Also upload the pre-composite background — this is what a future
+        # "move my logo" revision re-pastes onto. Best-effort: if it fails,
+        # the generation still succeeds and revisions just fall back to full
+        # regeneration.
+        base_image_url = None
+        try:
+            base_image_url = upload_base_image(business_id, generation_id, base_image)
+        except Exception:
+            logger.exception("Base image upload failed for generation=%s — logo moves will regenerate", generation_id)
+
         with get_session() as db:
             gen_row = db.query(Generation).filter(Generation.id == generation_id).first()
             gen_row.image_url = image_url
+            gen_row.base_image_url = base_image_url
             gen_row.caption = cap["caption"]
             gen_row.hashtags = cap["hashtags"]
             gen_row.status = "done"

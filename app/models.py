@@ -58,6 +58,7 @@ class Generation(Base):
     user_message = Column(Text, nullable=False)
     built_prompt = Column(Text)
     image_url = Column(Text)
+    base_image_url = Column(Text, nullable=True)  # pre-composite background — lets logo-move revisions re-paste for free
     caption = Column(Text)
     hashtags = Column(Text)
     quality_score = Column(Integer)
