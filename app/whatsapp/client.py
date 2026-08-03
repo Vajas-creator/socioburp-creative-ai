@@ -49,6 +49,31 @@ async def send_image(to: str, image_url: str, caption: str = ""):
     return await _post(payload)
 
 
+async def send_image_with_button(to: str, image_url: str, body: str, button_id: str, button_label: str):
+    """
+    Deliver a creative as an interactive message with one reply button
+    (e.g. "Post to Instagram"), instead of a plain image. `body` is the
+    caption text shown below the image. `button_label` must be <= 20 chars
+    (WhatsApp limit).
+    """
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "header": {"type": "image", "image": {"link": image_url}},
+            "body": {"text": body[:1024]},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": button_id, "title": button_label[:20]}}
+                ]
+            },
+        },
+    }
+    return await _post(payload)
+
+
 async def send_buttons(to: str, body: str, buttons: list[tuple[str, str]]):
     """
     Send up to 3 quick-reply buttons.

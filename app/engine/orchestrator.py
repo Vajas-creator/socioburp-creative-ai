@@ -50,7 +50,7 @@ import httpx
 from app.db import get_session
 from app.models import Business, BrandProfile, Generation, ConversationState
 from app.schemas import IncomingMessage
-from app.whatsapp.client import send_text, send_image
+from app.whatsapp.client import send_text, send_image, send_image_with_button
 from app.storage import upload_creative, upload_base_image
 from app.credits import charge_for_generation, get_balance
 from app.config import settings
@@ -85,6 +85,26 @@ def _check_rate_limit(db, business_id: uuid.UUID) -> bool:
         .count()
     )
     return recent_count < settings.MAX_GENERATIONS_PER_HOUR
+
+
+async def _deliver_creative(phone: str, business_id: uuid.UUID, generation_id: uuid.UUID, image_url: str, caption: str):
+    """
+    Send the finished creative to WhatsApp. If the business is onboarded for
+    Instagram auto-posting (Business.instagram_account_id is set), deliver
+    with a "Post to Instagram" reply button instead of a plain image —
+    tapping it is handled in router.py -> app/instagram.py.
+    """
+    with get_session() as db:
+        business = db.query(Business).filter(Business.id == business_id).first()
+        instagram_account_id = business.instagram_account_id if business else None
+
+    if instagram_account_id:
+        await send_image_with_button(
+            phone, image_url, body=caption,
+            button_id=f"post_ig_{generation_id}", button_label="Post to Instagram",
+        )
+    else:
+        await send_image(phone, image_url, caption=caption)
 
 
 async def generate(business_id: uuid.UUID, msg: IncomingMessage):
@@ -267,7 +287,7 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
 
         # Deliberately NO charge_for_generation here — logo moves are free.
         full_caption = f"{parent_caption}\n\n{parent_hashtags}" if parent_caption else ""
-        await send_image(phone, image_url, caption=full_caption[:1024])
+        await _deliver_creative(phone, business_id, generation_id, image_url, full_caption[:1024])
         await send_text(
             phone,
             f"✅ Moved your logo to the {position.replace('-', ' ')} — no credit charged for logo moves!\n\n"
@@ -396,7 +416,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             if balance <= settings.LOW_BALANCE_THRESHOLD else ""
         )
 
-        await send_image(phone, image_url, caption=full_caption[:1024])
+        await _deliver_creative(phone, business_id, generation_id, image_url, full_caption[:1024])
         await send_text(
             phone,
             "✨ Here's your creative!\n\n"

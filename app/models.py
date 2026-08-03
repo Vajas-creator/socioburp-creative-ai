@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Column, String, Integer, Text, ForeignKey, TIMESTAMP, func
+    Column, String, Integer, Text, ForeignKey, TIMESTAMP, func, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -26,6 +26,7 @@ class Business(Base):
     name = Column(String(200))
     industry = Column(String(100))
     onboarding_state = Column(String(50), default="new")  # new -> name -> industry -> logo -> colors -> tone -> done
+    instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     brand_profile = relationship("BrandProfile", back_populates="business", uselist=False)
@@ -65,6 +66,7 @@ class Generation(Base):
     credits_charged = Column(Integer, default=1)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("generations.id"), nullable=True)
     status = Column(String(20), default="pending")  # pending -> generating -> done -> failed
+    posted_to_instagram = Column(Boolean, nullable=False, default=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     business = relationship("Business", back_populates="generations")
