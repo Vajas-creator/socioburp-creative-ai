@@ -40,15 +40,25 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
             Generation.business_id == business_id,  # never let a business post another's creative
         ).first()
 
-    if gen is None:
+        # Pull everything into plain values while the session is still open —
+        # gen/business become unusable (DetachedInstanceError) once we leave
+        # this block, since get_session() expires attributes on commit.
+        gen_found = gen is not None
+        already_posted = gen.posted_to_instagram if gen else None
+        image_url = gen.image_url if gen else None
+        caption = gen.caption if gen else None
+        hashtags = gen.hashtags if gen else None
+        instagram_account_id = business.instagram_account_id if business else None
+
+    if not gen_found:
         await send_text(phone, "Couldn't find that creative — it may be too old. Please generate a new one.")
         return
 
-    if gen.posted_to_instagram:
+    if already_posted:
         await send_text(phone, "That one's already posted to Instagram ✅")
         return
 
-    if not business or not business.instagram_account_id:
+    if not instagram_account_id:
         await send_text(
             phone,
             "Your Instagram isn't connected for auto-posting yet 🙏 "
@@ -61,16 +71,16 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
         await send_text(phone, "Posting to Instagram isn't set up yet on our end 🙏 We're on it.")
         return
 
-    full_caption = f"{gen.caption}\n\n{gen.hashtags}" if gen.caption else ""
+    full_caption = f"{caption}\n\n{hashtags}" if caption else ""
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
                 settings.MAKE_INSTAGRAM_WEBHOOK_URL,
                 json={
-                    "account_id": business.instagram_account_id,
+                    "account_id": instagram_account_id,
                     "content_type": "photo",
-                    "image_url": gen.image_url,
+                    "image_url": image_url,
                     "caption": full_caption[:2200],  # Instagram caption limit
                 },
             )
