@@ -41,6 +41,9 @@ class Settings:
     RAZORPAY_KEY_SECRET: str = os.environ.get("RAZORPAY_KEY_SECRET", "")
     RAZORPAY_WEBHOOK_SECRET: str = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
+    # --- Instagram auto-posting (via Make.com scenario) ---
+    MAKE_INSTAGRAM_WEBHOOK_URL: str = os.environ.get("MAKE_INSTAGRAM_WEBHOOK_URL", "")
+
     # --- Alerts (optional but recommended) ---
     ALERT_TELEGRAM_TOKEN: str = os.environ.get("ALERT_TELEGRAM_TOKEN", "")
     ALERT_TELEGRAM_CHAT_ID: str = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")

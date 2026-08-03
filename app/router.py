@@ -58,6 +58,22 @@ async def handle_message(msg: IncomingMessage):
             await payments.handle_pack_selection(biz_id, msg.sender, msg.button_id)
             return
 
+        if msg.button_id and msg.button_id.startswith("post_ig_"):
+            # "Post to Instagram" reply from a delivered creative —
+            # button_id format is post_ig_<generation_id>
+            import uuid as _uuid
+            from app import instagram
+
+            gen_id_str = msg.button_id[len("post_ig_"):]
+            try:
+                generation_id = _uuid.UUID(gen_id_str)
+            except ValueError:
+                logger.warning("Malformed post_ig_ button_id: %s", msg.button_id)
+                await send_text(msg.sender, "Something went wrong with that button 🙏 Please try generating again.")
+                return
+            await instagram.handle_post_request(biz_id, msg.sender, generation_id)
+            return
+
         if text_lower == "history":
             from app.history import send_recent_generations
             await send_recent_generations(biz_id, msg.sender)
