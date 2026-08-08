@@ -6,21 +6,31 @@ therefore its own independent httpx connection pool).
 Why this matters: this codebase grew from 4 modules calling Claude to 10
 across recent development — each previously instantiated
 `AsyncAnthropic(api_key=...)` at import time, meaning a single running
-process held 10 separate connection pools. On a resource-constrained
-instance this is a plausible contributor to intermittent
-APIConnectionError failures (seen in production Aug 8, 2026, first real
-traffic after a large merge that added six of these ten call sites at
-once). Even setting that specific incident aside, holding one shared,
-reused client is simply correct SDK usage — the Anthropic Python SDK is
-explicitly designed to be instantiated once and reused, not recreated per
-call site — so this is worth doing regardless of whether it turns out to
-be the whole explanation.
+process held 10 separate connection pools. Consolidating to one shared,
+reused client is simply correct SDK usage regardless of any other issue.
+
+IMPORTANT (Aug 8, 2026): explicitly passes our own pre-configured httpx
+client instead of letting the SDK build its own internally. Diagnosed via
+GET /debug/network-check on production: DNS, raw TCP, and a bare
+`httpx.AsyncClient()` HTTPS request ALL succeeded cleanly against
+api.anthropic.com (410ms, clean response) — but the Anthropic SDK's own
+internal call to the exact same host still failed with
+APIConnectionError, taking 1.5s to do so. That isolates the problem to
+something specific in how the SDK constructs its OWN httpx client,
+separate from DNS/IPv6/general network reachability (all already ruled
+out — see app/network_fix.py and app/debug_network.py). Since a bare
+httpx client is proven to work against this exact host, handing the SDK
+that same kind of client directly sidesteps whatever it was doing
+differently on its own.
 
 Import this shared `client` everywhere `AsyncAnthropic(...)` used to be
 constructed locally: from app.anthropic_client import client
 """
+import httpx
 from anthropic import AsyncAnthropic
 
 from app.config import settings
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+_http_client = httpx.AsyncClient(timeout=60.0)
+
+client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY, http_client=_http_client)
