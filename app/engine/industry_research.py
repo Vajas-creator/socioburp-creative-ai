@@ -21,7 +21,6 @@ research.
 """
 import logging
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.db import get_session
@@ -29,7 +28,7 @@ from app.models import IndustryStyleResearch
 
 logger = logging.getLogger("socioburp.engine.industry_research")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 RESEARCH_PROMPT_TEMPLATE = (
     "Research current Instagram marketing visual trends for {industry} "

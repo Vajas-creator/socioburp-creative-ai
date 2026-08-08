@@ -12,7 +12,6 @@ orchestrator.py where BusinessContext is built while the session is open.
 import json
 import logging
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.engine.context import BusinessContext
@@ -20,7 +19,7 @@ from app.i18n import LANGUAGE_NAMES
 
 logger = logging.getLogger("socioburp.engine.prompt_builder")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 SYSTEM_PROMPT = """You write prompts for an image generation model that creates
 social media marketing creatives for Indian small businesses.

@@ -30,13 +30,12 @@ import json
 import logging
 import re
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 
 logger = logging.getLogger("socioburp.i18n")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 LANGUAGE_NAMES = {
     "en": "English",
