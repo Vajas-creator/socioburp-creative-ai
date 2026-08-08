@@ -20,11 +20,12 @@ seen so far) so we have a clean baseline in the same response.
 """
 import asyncio
 import logging
+import secrets
 import socket
 import time
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.anthropic_client import client
 from app.config import settings
@@ -84,12 +85,21 @@ async def _anthropic_sdk_test() -> dict:
 
 
 @router.get("/debug/network-check")
-async def network_check():
+async def network_check(secret: str = ""):
     """
-    Hit this directly from a browser or curl — no auth, temporary only.
-    Returns every layer's result for api.anthropic.com side-by-side with
-    the same tests against graph.facebook.com (our known-working baseline).
+    Hit this directly from a browser or curl — gated by ?secret=, temporary
+    only. Returns every layer's result for api.anthropic.com side-by-side
+    with the same tests against graph.facebook.com (our known-working
+    baseline).
+
+    Fails closed: if DEBUG_NETWORK_SECRET isn't set, every request gets
+    403 regardless of what ?secret= is — a missing env var must never
+    accidentally leave this open, since it exposes internal network
+    detail and makes a real billed Anthropic API call per hit.
     """
+    if not settings.DEBUG_NETWORK_SECRET or not secrets.compare_digest(secret, settings.DEBUG_NETWORK_SECRET):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     results = {
         "1_dns_resolution": {
             "anthropic": _dns_test("api.anthropic.com"),
