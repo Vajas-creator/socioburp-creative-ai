@@ -19,11 +19,15 @@ async def send_recent_generations(business_id: uuid.UUID, phone: str):
             .limit(3)
             .all()
         )
+        # Pull everything into plain values while the session is still open —
+        # gen becomes unusable (DetachedInstanceError) once we leave this
+        # block, since get_session() expires attributes on commit.
+        recent_creatives = [(gen.image_url, gen.caption) for gen in recent]
 
-    if not recent:
+    if not recent_creatives:
         await send_text(phone, "No creatives yet! Try: *Create a weekend offer post*")
         return
 
-    for gen in recent:
-        if gen.image_url:
-            await send_image(phone, gen.image_url, caption=gen.caption or "")
+    for image_url, caption in recent_creatives:
+        if image_url:
+            await send_image(phone, image_url, caption=caption or "")
