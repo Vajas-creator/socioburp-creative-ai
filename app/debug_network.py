@@ -110,6 +110,48 @@ async def _anthropic_sdk_fresh_client_test() -> dict:
         return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
 
 
+async def _raw_post_test() -> dict:
+    """
+    Layer 3 (bare httpx) succeeds, but it's a GET to '/'. Layers 4/5 (the
+    SDK) fail, but they're a POST to '/v1/messages' with the SDK's real
+    headers and a JSON body. Those are two different variables at once —
+    "who constructed the client" AND "what request is actually being
+    sent". This isolates the second one: a raw httpx POST to the REAL
+    endpoint, with the real headers and a real (minimal) body, but with
+    the Anthropic SDK entirely out of the picture. If this fails the same
+    way, the problem isn't the SDK at all — it's something about this
+    specific request pattern (POST, this path, this body/header shape)
+    getting blocked regardless of client library, which would point at a
+    WAF/edge-level rule rather than anything in our code. If it succeeds,
+    that confirms the SDK's own request construction really is the
+    differentiator.
+    """
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http_client:
+            resp = await http_client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": settings.ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": settings.CLAUDE_INTENT_MODEL,
+                    "max_tokens": 5,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
+        return {
+            "ok": True,
+            "elapsed_ms": round((time.monotonic() - start) * 1000, 1),
+            "status_code": resp.status_code,
+            "body_snippet": resp.text[:200],
+        }
+    except Exception as e:
+        return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
+
+
 @router.get("/debug/network-check")
 async def network_check(secret: str = ""):
     """
@@ -145,6 +187,7 @@ async def network_check(secret: str = ""):
 
     results["4_full_anthropic_sdk_call_shared_client"] = await _anthropic_sdk_test()
     results["5_full_anthropic_sdk_call_fresh_client"] = await _anthropic_sdk_fresh_client_test()
+    results["6_raw_httpx_post_to_real_endpoint_no_sdk"] = await _raw_post_test()
 
     logger.info("Network diagnostic run: %s", results)
     return results

@@ -57,6 +57,7 @@ debug_network._tcp_connect_test = _fake_async_probe
 debug_network._https_get_test = _fake_async_probe
 debug_network._anthropic_sdk_test = _fake_async_probe
 debug_network._anthropic_sdk_fresh_client_test = _fake_async_probe
+debug_network._raw_post_test = _fake_async_probe
 
 from fastapi import FastAPI  # noqa: E402
 app = FastAPI()
@@ -95,7 +96,8 @@ def run():
     assert resp.status_code == 200, f"FAIL: expected 200 with correct secret, got {resp.status_code}: {resp.text}"
     data = resp.json()
     assert "4_full_anthropic_sdk_call_shared_client" in data, f"FAIL: expected diagnostic body, got {data}"
-    assert "5_full_anthropic_sdk_call_fresh_client" in data, f"FAIL: expected the new fresh-client diagnostic layer, got {data}"
+    assert "5_full_anthropic_sdk_call_fresh_client" in data, f"FAIL: expected the fresh-client diagnostic layer, got {data}"
+    assert "6_raw_httpx_post_to_real_endpoint_no_sdk" in data, f"FAIL: expected the raw-post diagnostic layer, got {data}"
     print(f"PASS: correct ?secret= let the request through, got diagnostic body: {list(data.keys())}\n")
 
     print("ALL TESTS PASSED")
