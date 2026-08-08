@@ -48,9 +48,6 @@ class Settings:
     ALERT_TELEGRAM_TOKEN: str = os.environ.get("ALERT_TELEGRAM_TOKEN", "")
     ALERT_TELEGRAM_CHAT_ID: str = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")
 
-    # --- Debug (temporary) ---
-    DEBUG_NETWORK_SECRET: str = os.environ.get("DEBUG_NETWORK_SECRET", "")  # gates GET /debug/network-check; unset = endpoint stays locked
-
     # --- Business rules ---
     SIGNUP_BONUS_CREDITS: int = int(os.environ.get("SIGNUP_BONUS_CREDITS", "20"))
     LOW_BALANCE_THRESHOLD: int = int(os.environ.get("LOW_BALANCE_THRESHOLD", "3"))

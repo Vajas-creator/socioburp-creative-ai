@@ -10,19 +10,19 @@ process held that many separate connection pools. Consolidating to one
 shared, reused client is simply correct SDK usage regardless of any other
 issue.
 
-INVESTIGATION HISTORY (Aug 8, 2026): production connection failures to
-api.anthropic.com were investigated via GET /debug/network-check (see
-app/debug_network.py). DNS, raw TCP, and a bare httpx request all succeeded
-cleanly against this host while calls through this module's client failed.
-An earlier attempt at an explicit http_client=... override (default httpx
-settings) was tried and did NOT resolve it on its own. This revision
-reapplies an explicit http_client, but now with the specific transport
-settings called out in that investigation (HTTP/1.1 only, no env-derived
-proxy/trust config, explicit connect/read timeouts, and a bounded
-connection pool) rather than httpx's defaults — narrower and more
-deliberate than the reverted attempt. It is paired with retry-on-
-APIConnectionError (below) so that even if this doesn't fully resolve the
-underlying cause, transient failures don't surface to users.
+INVESTIGATION HISTORY (Aug 8, 2026, resolved): production calls were
+failing with APIConnectionError. The actual root cause turned out to be a
+corrupted ANTHROPIC_API_KEY value in the Render environment (a newline and
+a second concatenated key had ended up in the same env var), which made
+httpcore's h11 layer reject the x-api-key header client-side before any
+request left the process — not a networking or transport issue at all.
+The temporary diagnostic endpoints used to isolate this (GET
+/debug/network-check, GET /debug-anthropic) have been removed now that
+the env var is fixed. The explicit http_client below (custom timeouts,
+connection pool, HTTP/1.1) and the retry-on-APIConnectionError wrapper
+are kept as genuine hardening — reused-client hygiene and resilience to
+transient connection failures — independent of the incident that
+prompted them.
 
 Import this shared `client` everywhere `AsyncAnthropic(...)` used to be
 constructed locally: from app.anthropic_client import client
