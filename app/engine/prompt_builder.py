@@ -42,8 +42,14 @@ Rules:
   letters, and not translated-then-romanized. The image_prompt field must
   explicitly instruct the image model to render that headline text in that
   exact script.
-- Offer details (discount %, dates, phone numbers) go in the CAPTION, not
-  baked into the image itself.
+- Offer details (discount %, dates, phone numbers) go in the CAPTION by
+  default, not baked into the image itself — UNLESS the user's request
+  explicitly asks for that detail to appear ON the image (e.g. "put a 25%
+  off overlay on it", "add the discount as text on the image"). In that
+  case, honor it: include that specific detail in the image_prompt as part
+  of the headline/subline (still within the 6-word headline + 4-word
+  subline limit) rather than silently routing it to the caption instead.
+  An explicit instruction always wins over the default.
 - If brand colors are missing, pick colors appropriate to the industry and tone.
 - If logo is missing, don't mention logo placement.
 - If "Distilled style pattern" or "Recent requests this client has responded

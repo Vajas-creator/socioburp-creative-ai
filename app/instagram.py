@@ -85,6 +85,19 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
                     "caption": full_caption[:2200],  # Instagram caption limit
                 },
             )
+        # Log the full response on EVERY call, not just failures. A Make.com
+        # webhook trigger acks (2xx) the moment it receives the request,
+        # normally BEFORE the rest of the scenario -- including the actual
+        # Instagram Graph API publish step -- has run. So a 2xx here proves
+        # Make received the request, never that the post actually landed on
+        # Instagram; if it silently doesn't (expired token, missing
+        # instagram_content_publish permission scope, bad account_id inside
+        # the Make scenario), this response body is the only place that
+        # might say why, and it was previously discarded on the success path.
+        logger.info(
+            "Make IG webhook response for generation=%s account=%s: %s | %s",
+            generation_id, instagram_account_id, resp.status_code, resp.text[:500],
+        )
         if resp.status_code >= 400:
             logger.error("Make IG webhook failed: %s | %s", resp.status_code, resp.text)
             await send_text(phone, "Posting to Instagram failed 🙏 No credits affected — please try again.")
@@ -103,4 +116,7 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
     # choosing to publish something publicly is stronger than any score.
     await learning.record_accepted_direction(business_id, generation_id, require_quality_threshold=False)
 
-    await send_text(phone, "Posted to Instagram ✅")
+    # Deliberately not "Posted ✅" -- a 2xx here only means Make accepted the
+    # request, not that Instagram's publish step (inside that scenario)
+    # actually succeeded. See the logging note above.
+    await send_text(phone, "Sent to Instagram 📤 Check your account in a minute to confirm it's live.")
