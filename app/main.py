@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from app.whatsapp.webhook import router as whatsapp_router
 from app.payments import router as payments_router
+from app.debug_network import router as debug_network_router  # TEMPORARY — remove once the connection issue is resolved
 from app.db import init_db
 
 logging.basicConfig(
@@ -27,6 +28,7 @@ app = FastAPI(title="SocioBurp Creative AI")
 
 app.include_router(whatsapp_router, tags=["whatsapp"])
 app.include_router(payments_router, tags=["payments"])
+app.include_router(debug_network_router, tags=["debug"])  # TEMPORARY
 
 
 @app.on_event("startup")
