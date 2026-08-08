@@ -7,6 +7,8 @@ Run locally:
 Deploy: this file is the target for Render's start command
     uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
+from app import network_fix  # noqa: F401  -- MUST be the first import. Forces IPv4-only DNS before any other module can open a network connection. See app/network_fix.py.
+
 import logging
 
 from fastapi import FastAPI
