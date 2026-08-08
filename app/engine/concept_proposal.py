@@ -21,7 +21,6 @@ generation built on a misunderstood brief.
 import json
 import logging
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.engine.context import BusinessContext
@@ -30,7 +29,7 @@ from app.persona import PERSONA_SYSTEM_FRAGMENT
 
 logger = logging.getLogger("socioburp.engine.concept_proposal")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 DECIDE_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 

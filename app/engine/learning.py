@@ -47,7 +47,6 @@ import json
 import logging
 import uuid
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.db import get_session
@@ -55,7 +54,7 @@ from app.models import BrandProfile, Generation, Business, LearningEvent
 
 logger = logging.getLogger("socioburp.engine.learning")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 MAX_LEARNED_PREFERENCES = 8
 

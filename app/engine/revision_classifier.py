@@ -22,13 +22,12 @@ logo move, never that a real creative change gets skipped.
 import json
 import logging
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.revision_classifier")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 VALID_POSITIONS = ("top-left", "top-right", "bottom-left", "bottom-right", "center")
 

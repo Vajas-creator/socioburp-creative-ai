@@ -6,13 +6,12 @@ be fast and cheap — this is NOT where the product's quality comes from.
 import json
 import logging
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.intent")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 SYSTEM_PROMPT = """Classify the user's message into exactly one intent:
 - GENERATE: wants a new creative ("create a Diwali post", "make an offer for tomorrow", "post banao kal ke liye")

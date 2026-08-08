@@ -16,13 +16,12 @@ import base64
 import json
 import logging
 
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.color_discovery")
 
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+from app.anthropic_client import client
 
 COLOR_EXTRACTION_SYSTEM_PROMPT = """You are analyzing an image (a small business's
 Instagram screenshot and/or logo) to identify their brand's primary color palette,
