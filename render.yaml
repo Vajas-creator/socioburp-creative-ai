@@ -3,7 +3,16 @@ services:
     name: socioburp-creative-ai
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
+    # alembic upgrade head runs on every deploy, after deps install and
+    # before the new code goes live. Without this, a schema change ships
+    # in the ORM model but never reaches the live database until someone
+    # runs the migration by hand -- exactly what happened with migration
+    # 0010 (businesses.pending_first_request): the column existed in code,
+    # not in Postgres, and every request touching Business broke with
+    # psycopg2.errors.UndefinedColumn until it was applied manually.
+    # init_db() (app/db.py, run at startup) can't cover this gap -- it
+    # only creates missing TABLES, it never alters existing ones.
+    buildCommand: "pip install -r requirements.txt && alembic upgrade head"
     startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PYTHON_VERSION
