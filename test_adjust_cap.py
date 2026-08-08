@@ -102,7 +102,7 @@ orchestrator.concept_proposal.interpret_reply = fake_interpret_reply
 pipeline_calls = []
 
 
-async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source=None):
+async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source=None, reference_image=None):
     pipeline_calls.append(brief)
     print(f"[GENERATION PIPELINE CALLED] brief={brief!r}")
 

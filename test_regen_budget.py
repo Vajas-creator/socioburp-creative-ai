@@ -112,7 +112,7 @@ from app.engine import image_gen  # noqa: E402
 image_gen_call_count = {"n": 0}
 
 
-async def fake_generate_images(prompt, count=2):
+async def fake_generate_images(prompt, count=2, reference_image=None):
     image_gen_call_count["n"] += 1
     return [png_bytes(), png_bytes()]
 

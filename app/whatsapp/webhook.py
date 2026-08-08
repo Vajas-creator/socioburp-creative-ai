@@ -62,7 +62,14 @@ def parse_message(payload: dict) -> IncomingMessage | None:
             return IncomingMessage(sender=sender, type="text", text=msg["text"]["body"], message_id=message_id)
 
         if msg_type == "image":
-            return IncomingMessage(sender=sender, type="image", media_id=msg["image"]["id"], message_id=message_id)
+            # Meta includes a "caption" field when the client attaches text
+            # to the photo directly (the natural way to say "edit this: ...")
+            # -- must be captured into `text`, or that instruction is
+            # silently lost and the client gets asked to repeat themselves.
+            return IncomingMessage(
+                sender=sender, type="image", media_id=msg["image"]["id"],
+                text=msg["image"].get("caption"), message_id=message_id,
+            )
 
         if msg_type == "interactive":
             interactive = msg["interactive"]

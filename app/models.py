@@ -30,6 +30,12 @@ class Business(Base):
     regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased
     regens_used_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens actually used
     preferred_language = Column(String(10), nullable=True)  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml'; NULL = not yet detected, treated as 'en'
+    # Set when the very first message already described a real creative
+    # request (see app/onboarding.py's "new" state) instead of just being a
+    # greeting -- the client's own words, carried through the question
+    # sequence and auto-generated the moment onboarding finishes, so they
+    # never have to repeat themselves. Cleared once that generation runs.
+    pending_first_request = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     brand_profile = relationship("BrandProfile", back_populates="business", uselist=False)

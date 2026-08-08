@@ -143,7 +143,7 @@ orchestrator.prompt_builder.build = fake_build
 from app.engine import image_gen  # noqa: E402
 
 
-async def fake_generate_images(prompt, count=2):
+async def fake_generate_images(prompt, count=2, reference_image=None):
     calls["image_gen"] += 1
     return [png_bytes(RED), png_bytes(RED)]
 

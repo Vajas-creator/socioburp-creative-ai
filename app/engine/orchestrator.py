@@ -50,7 +50,7 @@ import httpx
 from app.db import get_session
 from app.models import Business, BrandProfile, Generation, ConversationState
 from app.schemas import IncomingMessage
-from app.whatsapp.client import send_text, send_image, send_image_with_button
+from app.whatsapp.client import send_text, send_image, send_image_with_button, download_media
 from app.storage import upload_creative, upload_base_image
 from app.credits import charge_for_generation, get_balance, regen_within_budget, record_regen_used
 from app.config import settings
@@ -115,6 +115,22 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         return
 
     phone = msg.sender
+
+    # A photo sent WITH instructions (e.g. "change the background to black,
+    # add a 25% off overlay") -- download it now so it can be passed to
+    # image_gen as an edit reference instead of being generated from a text
+    # description alone. Only wired into the single-turn paths below
+    # (SPECIFIC_ENOUGH, REVISE) where the client's message is used as-is;
+    # a NEEDS_PROPOSAL negotiation spans multiple messages and there's
+    # nowhere yet to persist image bytes across those turns, so a photo
+    # attached to a request that needs a proposal first falls back to the
+    # existing text-only flow for that turn.
+    reference_image = None
+    if msg.type == "image" and msg.media_id:
+        try:
+            reference_image = await download_media(msg.media_id)
+        except Exception:
+            logger.exception("Reference image download failed for business=%s — generating from text alone", business_id)
 
     # --- Load business context (ORM objects never leave this block) ---
     with get_session() as db:
@@ -247,7 +263,12 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
                 "— falling back to full regeneration", business_id,
             )
 
-        await _run_generation(business_id, phone, ctx, rev["brief"], msg.text, last_generation_id, is_revision=True, trigger_source="revision")
+        # Use the client's own words, not rev["brief"] -- that's a one-line
+        # paraphrase of a single message and is exactly where specific
+        # instructions ("change the background to black") get lost. There's
+        # no multi-turn negotiation to aggregate here, so the raw message is
+        # strictly more faithful than a re-summarized version of itself.
+        await _run_generation(business_id, phone, ctx, msg.text, msg.text, last_generation_id, is_revision=True, trigger_source="revision", reference_image=reference_image)
         return
 
     # --- Branch 3: fresh GENERATE request — decide whether to propose first ---
@@ -261,10 +282,17 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         await send_text(phone, decision["proposal_text"])
         return  # no generation yet, no charge — proposing a direction first
 
-    # SPECIFIC_ENOUGH — skip the proposal, go straight to generation
+    # SPECIFIC_ENOUGH — skip the proposal, go straight to generation.
+    # Use the client's own words, not decision["brief"] -- by this point
+    # the message has already been paraphrased once by intent_engine.classify()
+    # and decision["brief"] is a Claude call re-summarizing THAT paraphrase,
+    # not the original. Two lossy hops in a row is exactly how specific
+    # details ("25% off overlay") go missing; there's no proposal
+    # negotiation to aggregate in this branch, so the raw message loses
+    # nothing by being used directly.
     if last_generation_id:
         await learning.record_accepted_direction(business_id, last_generation_id)
-    await _run_generation(business_id, phone, ctx, decision["brief"], msg.text, last_generation_id, is_revision=False, trigger_source="specific_enough")
+    await _run_generation(business_id, phone, ctx, msg.text, msg.text, last_generation_id, is_revision=False, trigger_source="specific_enough", reference_image=reference_image)
 
 
 async def _recomposite_logo(business_id, phone, ctx, position, user_message, parent_id):
@@ -350,7 +378,7 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
         return True  # handled (with an error message) — don't run the paid pipeline on top
 
 
-async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source):
+async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source, reference_image: bytes | None = None):
     """
     The actual production pipeline (Week 2, unchanged): prompt build -> image
     gen -> quality check -> composite -> caption -> save -> charge -> deliver.
@@ -359,6 +387,12 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
     Generation.trigger_source in app/models.py for the full value set.
     Used by the weekly instrumentation query to measure how often the
     ADJUST-round cap actually fires.
+
+    reference_image: raw bytes of a photo the client attached to this
+    request (e.g. a product photo), if any — passed through to image_gen
+    as an edit reference instead of generating from a text description
+    alone. None for text-only requests, or when the caller couldn't
+    download it (see generate()).
     """
     await send_text(phone, "🎨 Creating your design... (~30 seconds)")
 
@@ -382,7 +416,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         notes_for_caption = built["notes_for_caption"]
 
         # --- Generate candidates ---
-        candidates = await image_gen.generate_images(image_prompt, count=2)
+        candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_image)
 
         if not candidates:
             await send_text(
@@ -430,7 +464,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                 scored["best_score"], REGEN_THRESHOLD, business_id,
             )
             record_regen_used(business_id)
-            retry_candidates = await image_gen.generate_images(image_prompt, count=2)
+            retry_candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_image)
             if retry_candidates:
                 retry_scored = await quality.score_and_pick(retry_candidates)
                 if retry_scored["best_score"] > scored["best_score"]:

@@ -37,6 +37,7 @@ from app.storage import upload_logo
 from app.config import settings
 from app import i18n
 from app.engine import industry_research, color_discovery
+from app.engine import intent as intent_engine
 
 logger = logging.getLogger("socioburp.onboarding")
 
@@ -79,11 +80,34 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             biz.preferred_language = detected
             language = detected
 
-            welcome = await i18n.t(
-                "welcome", language,
-                "👋 Hi, I'm Maya — your creative partner at SocioBurp! I'll help you create "
-                "branded social media content in seconds.\n\nFirst — what's your business name?",
-            )
+            # If the very first message already describes a real creative
+            # request ("Create a Diwali offer post, 20% off") rather than
+            # just a greeting ("hi"), don't force the generic "what's your
+            # business name?" opener with no acknowledgment of what they
+            # actually asked for. We still need name/industry/etc. before a
+            # *good* creative can be produced, so the question sequence
+            # itself is unchanged -- but the request is remembered
+            # (Business.pending_first_request) and auto-generated the
+            # moment onboarding finishes, so the client never has to repeat
+            # themselves. See the "awaiting_tone" branch below.
+            is_direct_request = False
+            if msg.text and msg.text.strip():
+                intent_result = await intent_engine.classify(msg.text)
+                is_direct_request = intent_result["intent"] == "GENERATE"
+
+            if is_direct_request:
+                biz.pending_first_request = msg.text.strip()
+                welcome = await i18n.t(
+                    "welcome_direct_request", language,
+                    "👋 Hi, I'm Maya — your creative partner at SocioBurp! Got it, I can make "
+                    "that for you 🎉\n\nQuick setup first (30 seconds) — what's your business name?",
+                )
+            else:
+                welcome = await i18n.t(
+                    "welcome", language,
+                    "👋 Hi, I'm Maya — your creative partner at SocioBurp! I'll help you create "
+                    "branded social media content in seconds.\n\nFirst — what's your business name?",
+                )
             if language != "en":
                 note = await i18n.t(
                     "language_note", language,
@@ -262,17 +286,39 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             from app.credits import add_credits
             add_credits(db, business_id, settings.SIGNUP_BONUS_CREDITS, reason="signup_bonus")
 
-            done_msg = await i18n.t(
-                "onboarding_done", language,
-                "🎉 You're all set! You have {credits} free credits.\n\n"
-                "Try: *Create a weekend offer post*\n\n"
-                "Anytime, you can also type:\n"
-                "• *credits* — check your balance\n"
-                "• *history* — see recent creatives\n"
-                "• *topup* — buy more credits",
-                credits=settings.SIGNUP_BONUS_CREDITS,
-            )
+            pending_request = biz.pending_first_request
+            biz.pending_first_request = None
+
+            # Commit now, not just at the end of this `with` block -- the
+            # state transition, cleared pending_first_request, and signup
+            # credits must be durable and visible before we hand off to
+            # orchestrator.generate() below, which opens its own fresh
+            # session and would otherwise see pre-commit (stale) data.
+            db.commit()
+
+            if pending_request:
+                done_msg = await i18n.t(
+                    "onboarding_done_with_request", language,
+                    "🎉 You're all set! You have {credits} free credits.\n\n"
+                    "Now let's make what you asked for...",
+                    credits=settings.SIGNUP_BONUS_CREDITS,
+                )
+            else:
+                done_msg = await i18n.t(
+                    "onboarding_done", language,
+                    "🎉 You're all set! You have {credits} free credits.\n\n"
+                    "Try: *Create a weekend offer post*\n\n"
+                    "Anytime, you can also type:\n"
+                    "• *credits* — check your balance\n"
+                    "• *history* — see recent creatives\n"
+                    "• *topup* — buy more credits",
+                    credits=settings.SIGNUP_BONUS_CREDITS,
+                )
             await send_text(phone, done_msg)
+
+            if pending_request:
+                from app.engine.orchestrator import generate as run_generation
+                await run_generation(business_id, IncomingMessage(sender=phone, type="text", text=pending_request))
             return
 
         logger.warning("Unknown onboarding state '%s' for business=%s", state, business_id)
