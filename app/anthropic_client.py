@@ -9,28 +9,25 @@ across recent development — each previously instantiated
 process held 10 separate connection pools. Consolidating to one shared,
 reused client is simply correct SDK usage regardless of any other issue.
 
-IMPORTANT (Aug 8, 2026): explicitly passes our own pre-configured httpx
-client instead of letting the SDK build its own internally. Diagnosed via
-GET /debug/network-check on production: DNS, raw TCP, and a bare
-`httpx.AsyncClient()` HTTPS request ALL succeeded cleanly against
-api.anthropic.com (410ms, clean response) — but the Anthropic SDK's own
-internal call to the exact same host still failed with
-APIConnectionError, taking 1.5s to do so. That isolates the problem to
-something specific in how the SDK constructs its OWN httpx client,
-separate from DNS/IPv6/general network reachability (all already ruled
-out — see app/network_fix.py and app/debug_network.py). Since a bare
-httpx client is proven to work against this exact host, handing the SDK
-that same kind of client directly sidesteps whatever it was doing
-differently on its own.
+INVESTIGATION NOTE (Aug 8, 2026): production connection failures to
+api.anthropic.com are under active investigation via GET
+/debug/network-check (see app/debug_network.py). DNS, raw TCP, and a bare
+httpx request all succeed cleanly against this host — only calls through
+this module's client fail. An explicit http_client=... override was
+tried and did NOT resolve it (ruled out — see git history on this file).
+Current hypothesis under test: this client being constructed once at
+MODULE IMPORT time, before uvicorn's event loop is running, may bind its
+connection pool to the wrong loop. debug_network.py's layer 5
+(_anthropic_sdk_fresh_client_test) constructs an equivalent client fresh,
+inside a request handler, as a direct comparison. Don't change this
+module's construction pattern again until that comparison gives a clear
+answer — see the diagnostic result before attempting another fix here.
 
 Import this shared `client` everywhere `AsyncAnthropic(...)` used to be
 constructed locally: from app.anthropic_client import client
 """
-import httpx
 from anthropic import AsyncAnthropic
 
 from app.config import settings
 
-_http_client = httpx.AsyncClient(timeout=60.0)
-
-client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY, http_client=_http_client)
+client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)

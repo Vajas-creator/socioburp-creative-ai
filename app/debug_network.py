@@ -72,9 +72,35 @@ async def _https_get_test(url: str, timeout: float = 8.0) -> dict:
 
 
 async def _anthropic_sdk_test() -> dict:
+    """Uses the SHARED client (app.anthropic_client), constructed once at
+    module import time — outside any running event loop."""
     start = time.monotonic()
     try:
         response = await client.messages.create(
+            model=settings.CLAUDE_INTENT_MODEL,
+            max_tokens=5,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return {"ok": True, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "response_id": response.id}
+    except Exception as e:
+        return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
+
+
+async def _anthropic_sdk_fresh_client_test() -> dict:
+    """
+    Same call as _anthropic_sdk_test(), but constructs a BRAND NEW
+    AsyncAnthropic (and its own fresh httpx client) right here, inside
+    this async function, at request time — mirroring exactly how layer
+    3's succeeding raw httpx test is structured. If this succeeds while
+    _anthropic_sdk_test() (the shared, import-time-constructed client)
+    fails, that isolates the problem to event-loop binding at
+    construction time, not anything about the SDK or the network itself.
+    """
+    start = time.monotonic()
+    try:
+        from anthropic import AsyncAnthropic
+        fresh_client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        response = await fresh_client.messages.create(
             model=settings.CLAUDE_INTENT_MODEL,
             max_tokens=5,
             messages=[{"role": "user", "content": "hi"}],
@@ -117,7 +143,8 @@ async def network_check(secret: str = ""):
         "facebook_baseline": await _https_get_test("https://graph.facebook.com/"),
     }
 
-    results["4_full_anthropic_sdk_call"] = await _anthropic_sdk_test()
+    results["4_full_anthropic_sdk_call_shared_client"] = await _anthropic_sdk_test()
+    results["5_full_anthropic_sdk_call_fresh_client"] = await _anthropic_sdk_fresh_client_test()
 
     logger.info("Network diagnostic run: %s", results)
     return results

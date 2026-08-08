@@ -56,6 +56,7 @@ async def _fake_async_probe(*args, **kwargs):
 debug_network._tcp_connect_test = _fake_async_probe
 debug_network._https_get_test = _fake_async_probe
 debug_network._anthropic_sdk_test = _fake_async_probe
+debug_network._anthropic_sdk_fresh_client_test = _fake_async_probe
 
 from fastapi import FastAPI  # noqa: E402
 app = FastAPI()
@@ -93,7 +94,8 @@ def run():
     resp = client.get("/debug/network-check", params={"secret": "correct-horse-battery-staple"})
     assert resp.status_code == 200, f"FAIL: expected 200 with correct secret, got {resp.status_code}: {resp.text}"
     data = resp.json()
-    assert "4_full_anthropic_sdk_call" in data, f"FAIL: expected diagnostic body, got {data}"
+    assert "4_full_anthropic_sdk_call_shared_client" in data, f"FAIL: expected diagnostic body, got {data}"
+    assert "5_full_anthropic_sdk_call_fresh_client" in data, f"FAIL: expected the new fresh-client diagnostic layer, got {data}"
     print(f"PASS: correct ?secret= let the request through, got diagnostic body: {list(data.keys())}\n")
 
     print("ALL TESTS PASSED")
