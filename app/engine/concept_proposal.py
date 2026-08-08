@@ -29,7 +29,7 @@ from app.persona import PERSONA_SYSTEM_FRAGMENT
 
 logger = logging.getLogger("socioburp.engine.concept_proposal")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 DECIDE_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 
@@ -77,7 +77,7 @@ async def decide(ctx: BusinessContext, user_message: str) -> dict:
         user_content += f"\n\nWrite proposal_text in {LANGUAGE_NAMES[ctx.language]} (concept_brief stays in English — it's internal-only)."
 
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=400,
             system=DECIDE_SYSTEM_PROMPT,
@@ -146,7 +146,7 @@ async def interpret_reply(ctx: BusinessContext, previous_proposal: str, client_r
         user_content += f"\n\nIf ADJUST, write proposal_text in {LANGUAGE_NAMES[ctx.language]} (concept_brief stays in English)."
 
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=400,
             system=INTERPRET_SYSTEM_PROMPT,

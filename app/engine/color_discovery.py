@@ -21,7 +21,7 @@ from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.color_discovery")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 COLOR_EXTRACTION_SYSTEM_PROMPT = """You are analyzing an image (a small business's
 Instagram screenshot and/or logo) to identify their brand's primary color palette,
@@ -50,7 +50,7 @@ async def extract_colors_from_image(image_bytes: bytes, media_type: str = "image
     """
     try:
         b64_data = base64.b64encode(image_bytes).decode("utf-8")
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=200,
             system=COLOR_EXTRACTION_SYSTEM_PROMPT,

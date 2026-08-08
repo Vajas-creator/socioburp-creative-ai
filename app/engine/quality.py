@@ -14,7 +14,7 @@ from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.quality")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 REGEN_THRESHOLD = 60
 
@@ -58,7 +58,7 @@ async def score_and_pick(images: list[bytes]) -> dict:
                 },
             })
 
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=400,
             system=SYSTEM_PROMPT,

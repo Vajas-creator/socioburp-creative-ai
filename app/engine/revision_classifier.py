@@ -27,7 +27,7 @@ from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.revision_classifier")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 VALID_POSITIONS = ("top-left", "top-right", "bottom-left", "bottom-right", "center")
 
@@ -62,7 +62,7 @@ async def classify(user_message: str) -> dict:
     handle a logo move too (just not for free), so this is the safe direction.
     """
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_INTENT_MODEL,
             max_tokens=150,
             system=SYSTEM_PROMPT,

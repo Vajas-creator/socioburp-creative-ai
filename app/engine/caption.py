@@ -16,7 +16,7 @@ from app.i18n import LANGUAGE_NAMES
 
 logger = logging.getLogger("socioburp.engine.caption")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 SYSTEM_PROMPT = """Write an Instagram caption for a social media marketing creative.
 
@@ -58,7 +58,7 @@ async def generate(ctx: BusinessContext, notes_for_caption: str) -> dict:
     user_content = "\n".join(context_lines)
 
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=400,
             system=SYSTEM_PROMPT,

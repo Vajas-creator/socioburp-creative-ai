@@ -63,15 +63,10 @@ async def part_a():
         def __init__(self, text):
             self.content = [type("Block", (), {"text": text})()]
 
-    class _FakeMessages:
-        @staticmethod
-        async def create(**kwargs):
-            return _FakeResponse('{"language": "ta"}')
+    async def _fake_create_message(**kwargs):
+        return _FakeResponse('{"language": "ta"}')
 
-    class _FakeClient:
-        messages = _FakeMessages()
-
-    i18n.client = _FakeClient()
+    i18n.create_message = _fake_create_message
     result = await i18n.detect_language("இது ஒரு சோதனை செய்தி")
     assert result == "ta", f"FAIL: expected 'ta' from mocked successful detection, got {result!r}"
     print("PASS: mocked successful detection returns 'ta' correctly\n")
@@ -88,16 +83,11 @@ async def part_b():
         def __init__(self, text):
             self.content = [type("Block", (), {"text": text})()]
 
-    class _FakeMessages:
-        @staticmethod
-        async def create(**kwargs):
-            call_count["n"] += 1
-            return _FakeResponse("வணக்கம்! நீங்கள் {credits} கிரெடிட்களைப் பெற்றுள்ளீர்கள்")
+    async def _fake_create_message(**kwargs):
+        call_count["n"] += 1
+        return _FakeResponse("வணக்கம்! நீங்கள் {credits} கிரெடிட்களைப் பெற்றுள்ளீர்கள்")
 
-    class _FakeClient:
-        messages = _FakeMessages()
-
-    i18n.client = _FakeClient()
+    i18n.create_message = _fake_create_message
     i18n._translation_cache.clear()
 
     r1 = await i18n.t("greeting_test", "ta", "Welcome! You have {credits} credits", credits=20)
@@ -117,15 +107,10 @@ async def part_b():
 
     print("--- Broken placeholder fallback ---")
 
-    class _FakeMessagesBroken:
-        @staticmethod
-        async def create(**kwargs):
-            return _FakeResponse("இது ஒரு மொழிபெயர்ப்பு பிழை")  # no {credits} placeholder at all — broken
+    async def _fake_create_message_broken(**kwargs):
+        return _FakeResponse("இது ஒரு மொழிபெயர்ப்பு பிழை")  # no {credits} placeholder at all — broken
 
-    class _FakeClientBroken:
-        messages = _FakeMessagesBroken()
-
-    i18n.client = _FakeClientBroken()
+    i18n.create_message = _fake_create_message_broken
     r4 = await i18n.t("broken_test", "ta", "You have {credits} credits", credits=7)
     assert r4 == "You have 7 credits", f"FAIL: a translation missing the placeholder should fall back to English, got {r4!r}"
     print(f"PASS: translation that dropped the {{credits}} placeholder correctly fell back to English: {r4!r}\n")

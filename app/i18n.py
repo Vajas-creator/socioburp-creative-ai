@@ -35,7 +35,7 @@ from app.config import settings
 
 logger = logging.getLogger("socioburp.i18n")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 LANGUAGE_NAMES = {
     "en": "English",
@@ -61,7 +61,7 @@ async def detect_language(text: str) -> str:
     if not text or not text.strip():
         return "en"
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_INTENT_MODEL,  # cheap, same tier as intent classification
             max_tokens=50,
             system=DETECT_SYSTEM_PROMPT,
@@ -101,7 +101,7 @@ async def t(key: str, language: str, english_text: str, **format_kwargs) -> str:
     cache_key = (key, language)
     if cache_key not in _translation_cache:
         try:
-            response = await client.messages.create(
+            response = await create_message(
                 model=settings.CLAUDE_PROMPT_MODEL,
                 max_tokens=400,
                 system=(

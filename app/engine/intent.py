@@ -11,7 +11,7 @@ from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.intent")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 SYSTEM_PROMPT = """Classify the user's message into exactly one intent:
 - GENERATE: wants a new creative ("create a Diwali post", "make an offer for tomorrow", "post banao kal ke liye")
@@ -31,7 +31,7 @@ async def classify(user_message: str) -> dict:
     far better failure mode than treating e.g. "Hi" as a generation request.
     """
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_INTENT_MODEL,
             max_tokens=150,
             system=SYSTEM_PROMPT,

@@ -54,7 +54,7 @@ from app.models import BrandProfile, Generation, Business, LearningEvent
 
 logger = logging.getLogger("socioburp.engine.learning")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 MAX_LEARNED_PREFERENCES = 8
 
@@ -187,7 +187,7 @@ async def _distill_preferences(business_name, business_industry, preferences: li
         + "\n".join(f"- {p}" for p in preferences)
     )
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=250,
             system=DISTILL_SYSTEM_PROMPT,

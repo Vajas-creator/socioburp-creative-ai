@@ -19,7 +19,7 @@ from app.i18n import LANGUAGE_NAMES
 
 logger = logging.getLogger("socioburp.engine.prompt_builder")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 SYSTEM_PROMPT = """You write prompts for an image generation model that creates
 social media marketing creatives for Indian small businesses.
@@ -69,7 +69,7 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
         user_content += f"\n\nTarget language for on-image headline text: {LANGUAGE_NAMES[ctx.language]}"
 
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=600,
             system=SYSTEM_PROMPT,

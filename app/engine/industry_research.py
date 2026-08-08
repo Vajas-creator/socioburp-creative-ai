@@ -28,7 +28,7 @@ from app.models import IndustryStyleResearch
 
 logger = logging.getLogger("socioburp.engine.industry_research")
 
-from app.anthropic_client import client
+from app.anthropic_client import create_message
 
 RESEARCH_PROMPT_TEMPLATE = (
     "Research current Instagram marketing visual trends for {industry} "
@@ -73,7 +73,7 @@ async def research_and_cache_if_needed(industry: str | None):
         return
 
     try:
-        response = await client.messages.create(
+        response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
             max_tokens=600,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
