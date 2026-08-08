@@ -36,6 +36,40 @@ def get_session():
         session.close()
 
 
+def run_migrations():
+    """
+    Runs `alembic upgrade head` programmatically, at application startup,
+    before the app accepts any traffic.
+
+    Render's free plan has no Shell access and no Pre-Deploy Command (both
+    premium-only) — there is no out-of-band way to run migrations before a
+    deploy goes live. This is the only hook left that runs before the
+    server starts serving requests. It's synchronous/blocking by design:
+    if a migration fails, startup should fail loudly rather than serve
+    traffic against a database schema the code doesn't match — that
+    mismatch (a column present in the ORM model but not yet in Postgres)
+    is exactly the outage this replaces. See migration 0010's rollout.
+
+    script_location is set explicitly to an absolute path rather than left
+    as alembic.ini's relative "migrations" — Alembic resolves a relative
+    script_location against the process's current working directory, not
+    against alembic.ini's own location, so this would silently break if
+    the app is ever started from a directory other than the repo root.
+    """
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+
+    repo_root = Path(__file__).resolve().parent.parent
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "migrations"))
+
+    logger.info("Running alembic upgrade head...")
+    command.upgrade(cfg, "head")
+    logger.info("Database schema up to date.")
+
+
 def init_db():
     """
     Creates tables if they don't exist. Fine for MVP bootstrap; once you have

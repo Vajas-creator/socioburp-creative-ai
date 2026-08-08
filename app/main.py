@@ -15,7 +15,7 @@ from fastapi import FastAPI
 
 from app.whatsapp.webhook import router as whatsapp_router
 from app.payments import router as payments_router
-from app.db import init_db
+from app.db import init_db, run_migrations
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +32,12 @@ app.include_router(payments_router, tags=["payments"])
 @app.on_event("startup")
 async def on_startup():
     logger.info("Starting SocioBurp Creative AI backend...")
+    # Must run BEFORE init_db() and before FastAPI/uvicorn starts accepting
+    # requests -- Render's free plan has no Shell or Pre-Deploy Command, so
+    # this is the only place migrations can run ahead of live traffic. See
+    # app/db.py's run_migrations() docstring for why this replaced the
+    # previous "run it by hand on Render" process.
+    run_migrations()
     init_db()
     logger.info("Startup complete.")
 
