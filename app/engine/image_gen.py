@@ -42,6 +42,16 @@ async def _generate_openai(prompt: str, count: int) -> list[bytes]:
     """
     Calls OpenAI's image generation endpoint `count` times concurrently
     (one image per request is simplest and most reliable for retry logic).
+
+    Model: gpt-image-2 (switched from gpt-image-1 — Aug 2026). Chosen
+    specifically for its much stronger non-Latin script text rendering
+    (independently verified for Hindi/Devanagari and Kannada; Tamil,
+    Telugu, and Malayalam are less explicitly confirmed and should be
+    spot-checked against real output before trusting them at scale — see
+    app/i18n.py). VERIFY the response shape below (b64_json under
+    data[0]) still matches gpt-image-2's actual API before the first real
+    production run — this was switched without a live test against the
+    new model.
     """
     url = "https://api.openai.com/v1/images/generations"
     headers = {
@@ -51,7 +61,7 @@ async def _generate_openai(prompt: str, count: int) -> list[bytes]:
 
     async def _one_call():
         payload = {
-            "model": "gpt-image-1",
+            "model": "gpt-image-2",
             "prompt": prompt,
             "size": "1024x1024",
             "n": 1,

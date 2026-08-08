@@ -13,6 +13,7 @@ from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.engine.context import BusinessContext
+from app.i18n import LANGUAGE_NAMES
 
 logger = logging.getLogger("socioburp.engine.caption")
 
@@ -26,7 +27,8 @@ Format:
 - A clear call to action
 - Then a blank line, followed by 8-12 hashtags mixing niche + local/city + broad reach tags
 
-Keep the whole caption under 150 words.
+Keep the whole caption under 150 words. Hashtags stay in English/Latin script
+regardless of caption language — that's how they're actually searched on Instagram.
 
 Reply with JSON only, no other text: {"caption": "...", "hashtags": "..."}"""
 
@@ -47,6 +49,12 @@ async def generate(ctx: BusinessContext, notes_for_caption: str) -> dict:
     if ctx.website:
         context_lines.append(f"Website: {ctx.website}")
     context_lines.append(f"Offer/details to include: {notes_for_caption}")
+
+    language = ctx.language or "en"
+    if language != "en" and language in LANGUAGE_NAMES:
+        context_lines.append(
+            f"Write the caption itself in {LANGUAGE_NAMES[language]} (hashtags stay in English as noted above)."
+        )
 
     user_content = "\n".join(context_lines)
 

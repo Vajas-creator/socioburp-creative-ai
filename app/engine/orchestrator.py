@@ -52,7 +52,7 @@ from app.models import Business, BrandProfile, Generation, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_image, send_image_with_button
 from app.storage import upload_creative, upload_base_image
-from app.credits import charge_for_generation, get_balance
+from app.credits import charge_for_generation, get_balance, regen_within_budget, record_regen_used
 from app.config import settings
 from app.engine.context import BusinessContext
 from app.engine import intent as intent_engine
@@ -63,6 +63,8 @@ from app.engine import image_gen
 from app.engine import compositor
 from app.engine import caption as caption_engine
 from app.engine import quality
+from app.engine import learning
+from app.engine import industry_research
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
@@ -136,6 +138,10 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             website=profile.website if profile else None,
             contact_phone=profile.contact_phone if profile else None,
             logo_url=profile.logo_url if profile else None,
+            learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
+            style_summary=(profile.extras or {}).get("style_summary") if profile else None,
+            language=business.preferred_language or "en",
+            industry_style=industry_research.get_cached_style(business.industry),
         )
 
         within_limit = _check_rate_limit(db, business_id)
@@ -153,8 +159,40 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         pending = json.loads(pending_raw)
         result = await concept_proposal.interpret_reply(ctx, pending["proposal_text"], msg.text)
 
+        if result["classification"] == "RETRY":
+            # interpret_reply() itself failed (API hiccup) — ask again rather
+            # than guessing. pending_proposal is deliberately left untouched
+            # so the client's next reply gets a fresh, independent attempt.
+            await send_text(
+                phone,
+                "Sorry, I didn't quite catch that 🙏 Want me to go ahead with what "
+                "I proposed above, or is there something you'd like to change?",
+            )
+            return  # no generation yet, no charge
+
         if result["classification"] == "ADJUST":
-            new_pending = {"proposal_text": result["proposal_text"], "concept_brief": result["concept_brief"]}
+            current_adjust_count = pending.get("adjust_count", 0)
+            new_adjust_count = current_adjust_count + 1
+
+            if new_adjust_count >= 3:
+                # 2 rounds of pre-generation back-and-forth is enough —
+                # beyond that, generate with what's been gathered and let
+                # the client revise the actual image instead of continuing
+                # to negotiate over text with nothing visual to react to.
+                with get_session() as db:
+                    convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+                    convo.pending_proposal = None
+                if last_generation_id:
+                    await learning.record_accepted_direction(business_id, last_generation_id)
+                await send_text(phone, "Let's create this now — you can adjust anything directly on the image after 🎨")
+                await _run_generation(business_id, phone, ctx, result["concept_brief"], msg.text, last_generation_id, is_revision=False, trigger_source="adjust_cap")
+                return
+
+            new_pending = {
+                "proposal_text": result["proposal_text"],
+                "concept_brief": result["concept_brief"],
+                "adjust_count": new_adjust_count,
+            }
             with get_session() as db:
                 convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
                 convo.pending_proposal = json.dumps(new_pending)
@@ -166,7 +204,12 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         with get_session() as db:
             convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
             convo.pending_proposal = None
-        await _run_generation(business_id, phone, ctx, brief, msg.text, last_generation_id, is_revision=False)
+        if last_generation_id:
+            # Client is moving on to something new without having revised
+            # the prior generation first — treat it as accepted (subject to
+            # the quality gate inside record_accepted_direction).
+            await learning.record_accepted_direction(business_id, last_generation_id)
+        await _run_generation(business_id, phone, ctx, brief, msg.text, last_generation_id, is_revision=False, trigger_source="proposal_confirmed")
         return
 
     # --- Branch 2: no pending proposal — classify intent as before ---
@@ -177,7 +220,7 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     if user_intent in ("QUESTION", "OTHER"):
         await send_text(
             phone,
-            "I'm your creative assistant! Try something like:\n"
+            "I'm Maya, your creative partner here! Try something like:\n"
             "• *Create a weekend offer post*\n"
             "• *Make a Diwali sale creative*\n\n"
             "Or type *credits* / *history* / *topup* anytime.",
@@ -204,14 +247,14 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
                 "— falling back to full regeneration", business_id,
             )
 
-        await _run_generation(business_id, phone, ctx, rev["brief"], msg.text, last_generation_id, is_revision=True)
+        await _run_generation(business_id, phone, ctx, rev["brief"], msg.text, last_generation_id, is_revision=True, trigger_source="revision")
         return
 
     # --- Branch 3: fresh GENERATE request — decide whether to propose first ---
     decision = await concept_proposal.decide(ctx, brief)
 
     if decision["decision"] == "NEEDS_PROPOSAL":
-        pending = {"proposal_text": decision["proposal_text"], "concept_brief": decision["concept_brief"]}
+        pending = {"proposal_text": decision["proposal_text"], "concept_brief": decision["concept_brief"], "adjust_count": 0}
         with get_session() as db:
             convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
             convo.pending_proposal = json.dumps(pending)
@@ -219,7 +262,9 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         return  # no generation yet, no charge — proposing a direction first
 
     # SPECIFIC_ENOUGH — skip the proposal, go straight to generation
-    await _run_generation(business_id, phone, ctx, decision["brief"], msg.text, last_generation_id, is_revision=False)
+    if last_generation_id:
+        await learning.record_accepted_direction(business_id, last_generation_id)
+    await _run_generation(business_id, phone, ctx, decision["brief"], msg.text, last_generation_id, is_revision=False, trigger_source="specific_enough")
 
 
 async def _recomposite_logo(business_id, phone, ctx, position, user_message, parent_id):
@@ -268,6 +313,7 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
                 status="generating",
                 parent_id=parent_id,
                 base_image_url=base_image_url,  # carry forward so the logo can be moved again
+                trigger_source="logo_free_revision",
             )
             db.add(gen_row)
             db.flush()
@@ -304,10 +350,15 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
         return True  # handled (with an error message) — don't run the paid pipeline on top
 
 
-async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision):
+async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source):
     """
     The actual production pipeline (Week 2, unchanged): prompt build -> image
     gen -> quality check -> composite -> caption -> save -> charge -> deliver.
+
+    trigger_source records how this generation was initiated — see
+    Generation.trigger_source in app/models.py for the full value set.
+    Used by the weekly instrumentation query to measure how often the
+    ADJUST-round cap actually fires.
     """
     await send_text(phone, "🎨 Creating your design... (~30 seconds)")
 
@@ -340,14 +391,45 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             )
             return
 
-        # --- Quality check + one regen if needed ---
+        # --- Quality check + one regen if needed (budget-gated) ---
         scored = await quality.score_and_pick(candidates)
 
         if scored["best_score"] < REGEN_THRESHOLD:
+            if not regen_within_budget(business_id):
+                # This business has used its earned quality-check regen
+                # allowance for the current credit batch (see credits.py).
+                # Per policy: block rather than deliver a known-low-quality
+                # result — no charge, nothing delivered. Saved as a
+                # 'blocked' Generation row (0 credits) for visibility.
+                logger.info(
+                    "Regen allowance exhausted for business=%s (score=%s) — blocking delivery",
+                    business_id, scored["best_score"],
+                )
+                with get_session() as db:
+                    db.add(Generation(
+                        business_id=business_id,
+                        user_message=user_message,
+                        built_prompt=image_prompt,
+                        quality_score=scored["best_score"],
+                        credits_charged=0,
+                        status="blocked",
+                        parent_id=last_generation_id if is_revision else None,
+                        trigger_source=trigger_source,
+                    ))
+                await send_text(
+                    phone,
+                    "This one didn't quite meet our quality bar 🙏 You've used up the "
+                    "regeneration budget for your current credits, so please reach out to "
+                    "your SocioBurp contact, or this refreshes automatically once you top "
+                    "up. No credits were charged.",
+                )
+                return
+
             logger.info(
                 "Quality below threshold (%s < %s) for business=%s, regenerating once",
                 scored["best_score"], REGEN_THRESHOLD, business_id,
             )
+            record_regen_used(business_id)
             retry_candidates = await image_gen.generate_images(image_prompt, count=2)
             if retry_candidates:
                 retry_scored = await quality.score_and_pick(retry_candidates)
@@ -377,6 +459,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                 quality_score=scored["best_score"],
                 status="generating",
                 parent_id=last_generation_id if is_revision else None,
+                trigger_source=trigger_source,
             )
             db.add(gen_row)
             db.flush()

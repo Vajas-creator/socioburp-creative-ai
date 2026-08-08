@@ -25,14 +25,17 @@ from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.engine.context import BusinessContext
+from app.i18n import LANGUAGE_NAMES
+from app.persona import PERSONA_SYSTEM_FRAGMENT
 
 logger = logging.getLogger("socioburp.engine.concept_proposal")
 
 client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-DECIDE_SYSTEM_PROMPT = """You are a creative director at a marketing agency, deciding
-whether a client's request needs a concept discussion first, or is specific enough
-to start producing immediately.
+DECIDE_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
+
+You're deciding whether a client's request needs a concept discussion first,
+or is specific enough to start producing immediately.
 
 A request is SPECIFIC ENOUGH to skip the proposal when it already states what's
 needed clearly — occasion/theme, and either an offer detail or a clear visual
@@ -42,20 +45,25 @@ A request NEEDS_PROPOSAL when it's open-ended or vague. Example: "I want somethi
 for Diwali" or "make me a good post" — there's a real creative decision to make
 before anything should be produced.
 
-If NEEDS_PROPOSAL, write the actual proposal: a short, concrete creative direction
-(theme/mood, color direction, what the headline should focus on, logo placement)
-in the voice of a creative director pitching an idea, 2-4 sentences, ending with
-a light check-in question. Do not write image-generation prompt language — write
-what you'd actually say to a client on WhatsApp.
+If NEEDS_PROPOSAL, identify the SPECIFIC missing details that would most improve
+accuracy: offer specifics (discount %, dates, or key message), visual mood/color
+direction if not already fixed by the brand profile, and anything that must be
+included (a phone number, a specific product, a promotion detail). Only ask about
+what's actually missing — never ask about something already known from the brand
+profile or from "Distilled style pattern" / "Recent requests this client has
+responded well to" if present. Weave 1-3 direct clarifying questions naturally into 2-4 sentences,
+as Maya pitching a direction — not a form, not a single generic "sound good?" Do
+not write image-generation prompt language — write what you'd actually say to a
+client on WhatsApp.
 
 Reply with JSON only, no other text:
-{"decision": "SPECIFIC_ENOUGH", "brief": "..."}
+{{"decision": "SPECIFIC_ENOUGH", "brief": "..."}}
 or
-{"decision": "NEEDS_PROPOSAL", "proposal_text": "...", "concept_brief": "..."}
+{{"decision": "NEEDS_PROPOSAL", "proposal_text": "...", "concept_brief": "..."}}
 
 concept_brief is a short internal summary of the proposed direction (used later
 to actually build the creative) — NOT shown to the client. proposal_text IS
-shown to the client, on WhatsApp."""
+shown to the client, on WhatsApp, as Maya."""
 
 
 async def decide(ctx: BusinessContext, user_message: str) -> dict:
@@ -66,6 +74,8 @@ async def decide(ctx: BusinessContext, user_message: str) -> dict:
     """
     profile_summary = _summarize_context(ctx)
     user_content = f"Business profile:\n{profile_summary}\n\nClient's request: {user_message}"
+    if ctx.language and ctx.language != "en" and ctx.language in LANGUAGE_NAMES:
+        user_content += f"\n\nWrite proposal_text in {LANGUAGE_NAMES[ctx.language]} (concept_brief stays in English — it's internal-only)."
 
     try:
         response = await client.messages.create(
@@ -86,13 +96,25 @@ async def decide(ctx: BusinessContext, user_message: str) -> dict:
 
     except Exception:
         logger.exception("Concept proposal decision failed for: %r", user_message)
-        # Fail toward generation rather than getting stuck — worst case the
-        # client gets a slightly-off first draft instead of no response at all.
-        return {"decision": "SPECIFIC_ENOUGH", "brief": user_message}
+        # Fail safe, not toward generation: this call itself failed, so there
+        # is no real proposal to act on. Ask for clarification instead of
+        # guessing and spending a credit — reuses the existing NEEDS_PROPOSAL
+        # flow with a hardcoded question rather than a model-written one.
+        return {
+            "decision": "NEEDS_PROPOSAL",
+            "proposal_text": (
+                "Sorry, I didn't quite catch the details there 🙏 Could you tell me a "
+                "bit more about what you'd like — the occasion, any offer details, or "
+                "the general vibe you're going for?"
+            ),
+            "concept_brief": user_message,
+        }
 
 
-INTERPRET_SYSTEM_PROMPT = """A creative director proposed a concept to a client on
-WhatsApp. The client just replied. Classify their reply:
+INTERPRET_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
+
+You (Maya) proposed a concept to a client on WhatsApp. The client just replied.
+Classify their reply:
 
 CONFIRM - they're approving the proposed direction ("yes", "sounds good", "go
 ahead", "love it", "perfect") - even brief/casual confirmations count.
@@ -101,26 +123,28 @@ ADJUST - they're giving feedback, asking for a change, or expressing a
 preference different from what was proposed, however minor.
 
 If ADJUST, also write a revised proposal (same style as before: 2-4 sentences,
-creative director voice, ending with a check-in question) that incorporates
-their feedback.
+as Maya, ending with a check-in question) that incorporates their feedback.
 
 Reply with JSON only, no other text:
-{"classification": "CONFIRM"}
+{{"classification": "CONFIRM"}}
 or
-{"classification": "ADJUST", "proposal_text": "...", "concept_brief": "..."}"""
+{{"classification": "ADJUST", "proposal_text": "...", "concept_brief": "..."}}"""
 
 
 async def interpret_reply(ctx: BusinessContext, previous_proposal: str, client_reply: str) -> dict:
     """
-    Returns either:
+    Returns one of:
       {"classification": "CONFIRM"}
       {"classification": "ADJUST", "proposal_text": str, "concept_brief": str}
+      {"classification": "RETRY"}  -- only on failure; see except block below
     """
     user_content = (
         f"Business profile:\n{_summarize_context(ctx)}\n\n"
         f"Previously proposed concept: {previous_proposal}\n\n"
         f"Client's reply: {client_reply}"
     )
+    if ctx.language and ctx.language != "en" and ctx.language in LANGUAGE_NAMES:
+        user_content += f"\n\nIf ADJUST, write proposal_text in {LANGUAGE_NAMES[ctx.language]} (concept_brief stays in English)."
 
     try:
         response = await client.messages.create(
@@ -141,9 +165,11 @@ async def interpret_reply(ctx: BusinessContext, previous_proposal: str, client_r
 
     except Exception:
         logger.exception("Proposal reply interpretation failed for: %r", client_reply)
-        # Fail toward CONFIRM — if we can't tell, proceeding beats leaving
-        # the client stuck in a proposal loop that never resolves.
-        return {"classification": "CONFIRM"}
+        # Fail safe, not toward CONFIRM: auto-approving on a failed call means
+        # silently charging a credit and generating on a guess. RETRY asks
+        # again instead — the caller (orchestrator) leaves pending_proposal
+        # untouched, so the client's next reply gets a fresh attempt.
+        return {"classification": "RETRY"}
 
 
 def _summarize_context(ctx: BusinessContext) -> str:
@@ -154,4 +180,12 @@ def _summarize_context(ctx: BusinessContext) -> str:
         lines.append(f"Target audience: {ctx.target_audience}")
     if ctx.primary_color:
         lines.append(f"Primary color: {ctx.primary_color}")
+    if ctx.style_summary:
+        lines.append(f"Distilled style pattern for this client: {ctx.style_summary}")
+    if ctx.learned_preferences:
+        lines.append("Recent requests this client has responded well to (for style/direction reference):")
+        for pref in ctx.learned_preferences:
+            lines.append(f"  - {pref}")
+    if ctx.industry_style:
+        lines.append(f"Current industry trends: {ctx.industry_style}")
     return "\n".join(lines)

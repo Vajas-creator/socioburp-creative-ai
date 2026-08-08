@@ -24,6 +24,7 @@ from app.config import settings
 from app.db import get_session
 from app.models import Business, Generation
 from app.whatsapp.client import send_text
+from app.engine import learning
 
 logger = logging.getLogger("socioburp.instagram")
 
@@ -96,5 +97,10 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
     with get_session() as db:
         gen_row = db.query(Generation).filter(Generation.id == generation_id).first()
         gen_row.posted_to_instagram = True
+
+    # Tapping "Post to Instagram" is an explicit, strong accept signal —
+    # bypasses the quality gate (require_quality_threshold=False) since
+    # choosing to publish something publicly is stronger than any score.
+    await learning.record_accepted_direction(business_id, generation_id, require_quality_threshold=False)
 
     await send_text(phone, "Posted to Instagram ✅")
