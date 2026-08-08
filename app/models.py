@@ -27,6 +27,9 @@ class Business(Base):
     industry = Column(String(100))
     onboarding_state = Column(String(50), default="new")  # new -> name -> industry -> logo -> colors -> tone -> done
     instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting
+    regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased
+    regens_used_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens actually used
+    preferred_language = Column(String(10), nullable=True)  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml'; NULL = not yet detected, treated as 'en'
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     brand_profile = relationship("BrandProfile", back_populates="business", uselist=False)
@@ -65,8 +68,12 @@ class Generation(Base):
     quality_score = Column(Integer)
     credits_charged = Column(Integer, default=1)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("generations.id"), nullable=True)
-    status = Column(String(20), default="pending")  # pending -> generating -> done -> failed
+    status = Column(String(20), default="pending")  # pending -> generating -> done -> failed -> blocked (budget cap hit)
     posted_to_instagram = Column(Boolean, nullable=False, default=False)
+    # How this generation got triggered: 'specific_enough' | 'proposal_confirmed' |
+    # 'adjust_cap' | 'revision' | 'logo_free_revision'. Nullable for rows created
+    # before this column existed. See app/engine/orchestrator.py.
+    trigger_source = Column(String(30), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     business = relationship("Business", back_populates="generations")
@@ -93,3 +100,36 @@ class ConversationState(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     business = relationship("Business", back_populates="conversation_state")
+
+
+class LearningEvent(Base):
+    """
+    Audit trail for app/engine/learning.py's record_accepted_direction().
+    Written on every call, regardless of outcome — lets the weekly
+    instrumentation query precisely compare "quality_score of the NEXT
+    generation after a real 'recorded' event" vs "...after a 'skipped_quality'
+    event", instead of a fuzzier proxy correlation over the generations
+    table alone.
+    """
+    __tablename__ = "learning_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), index=True)
+    generation_id = Column(UUID(as_uuid=True), ForeignKey("generations.id"), nullable=True)
+    event_type = Column(String(20), nullable=False)  # 'recorded' | 'skipped_quality' | 'skipped_no_profile' | 'skipped_free_revision' | 'distilled'
+    quality_score = Column(Integer, nullable=True)  # the generation's score at the time of this event, if applicable
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class IndustryStyleResearch(Base):
+    """
+    Shared, cached research per industry (NOT per business) — a one-time
+    web-search-backed pass distilling current visual/marketing trends for
+    that industry, reused by every business in it rather than re-run per
+    client. See app/engine/industry_research.py.
+    """
+    __tablename__ = "industry_style_research"
+
+    industry = Column(String(100), primary_key=True)
+    style_summary = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

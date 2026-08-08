@@ -26,8 +26,10 @@ Reply with JSON only, no other text: {"intent": "GENERATE|REVISE|QUESTION|OTHER"
 async def classify(user_message: str) -> dict:
     """
     Returns {"intent": "GENERATE"|"REVISE"|"QUESTION"|"OTHER", "brief": str}
-    Falls back to GENERATE on any parsing failure — better to attempt a
-    generation than to silently do nothing when Claude's response is malformed.
+    Falls back to OTHER on any parsing failure — a hiccup here (timeout,
+    malformed JSON) must never silently spend a client's credit on a guess.
+    OTHER sends a generic "how to use me" reply with no charge, which is a
+    far better failure mode than treating e.g. "Hi" as a generation request.
     """
     try:
         response = await client.messages.create(
@@ -49,4 +51,4 @@ async def classify(user_message: str) -> dict:
 
     except Exception:
         logger.exception("Intent classification failed for message: %r", user_message)
-        return {"intent": "GENERATE", "brief": user_message}
+        return {"intent": "OTHER", "brief": user_message}

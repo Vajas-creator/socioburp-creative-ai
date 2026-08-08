@@ -7,3 +7,4 @@ class IncomingMessage(BaseModel):
     text: str | None = None
     media_id: str | None = None
     button_id: str | None = None
+    message_id: str | None = None  # Meta's WAMID — used to dedup webhook redeliveries, see app/whatsapp/dedup.py

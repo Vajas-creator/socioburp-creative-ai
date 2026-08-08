@@ -16,6 +16,7 @@ from anthropic import AsyncAnthropic
 
 from app.config import settings
 from app.engine.context import BusinessContext
+from app.i18n import LANGUAGE_NAMES
 
 logger = logging.getLogger("socioburp.engine.prompt_builder")
 
@@ -36,10 +37,23 @@ Rules:
   Raksha Bandhan = rakhi threads)
 - Text on image: MAXIMUM 6-word headline + optional 4-word subline. Image
   models render long text poorly — keep it punchy.
+- If a target language other than English is specified below, write the
+  headline_text itself IN THAT LANGUAGE'S SCRIPT (e.g. actual Devanagari for
+  Hindi, actual Tamil script for Tamil) — not transliterated into Latin
+  letters, and not translated-then-romanized. The image_prompt field must
+  explicitly instruct the image model to render that headline text in that
+  exact script.
 - Offer details (discount %, dates, phone numbers) go in the CAPTION, not
   baked into the image itself.
 - If brand colors are missing, pick colors appropriate to the industry and tone.
 - If logo is missing, don't mention logo placement.
+- If "Distilled style pattern" or "Recent requests this client has responded
+  well to" are listed, let them inform style/direction/mood — don't repeat
+  requests verbatim, use them as a signal for what this specific client
+  tends to like.
+- If "Current industry trends" is listed, let it inform general direction for
+  clients without much history yet — it's industry-wide signal, weight it
+  below anything client-specific (learned preferences/style pattern above).
 
 Reply with JSON only, no other text:
 {"image_prompt": "...", "headline_text": "...", "notes_for_caption": "..."}"""
@@ -52,6 +66,8 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
     profile_summary = _summarize_context(ctx)
 
     user_content = f"Business profile:\n{profile_summary}\n\nUser's request: {user_brief}"
+    if ctx.language and ctx.language != "en" and ctx.language in LANGUAGE_NAMES:
+        user_content += f"\n\nTarget language for on-image headline text: {LANGUAGE_NAMES[ctx.language]}"
 
     try:
         response = await client.messages.create(
@@ -102,4 +118,12 @@ def _summarize_context(ctx: BusinessContext) -> str:
     if ctx.contact_phone:
         lines.append(f"Contact phone: {ctx.contact_phone}")
     lines.append(f"Has logo: {'yes' if ctx.has_logo else 'no'}")
+    if ctx.style_summary:
+        lines.append(f"Distilled style pattern for this client: {ctx.style_summary}")
+    if ctx.learned_preferences:
+        lines.append("Recent requests this client has responded well to (for style/direction reference):")
+        for pref in ctx.learned_preferences:
+            lines.append(f"  - {pref}")
+    if ctx.industry_style:
+        lines.append(f"Current industry trends: {ctx.industry_style}")
     return "\n".join(lines)

@@ -50,7 +50,7 @@ orchestrator.send_text = fake_send_text
 pipeline_runs = []
 
 
-async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision):
+async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source=None):
     pipeline_runs.append(brief)
     print(f"[GENERATION PIPELINE] brief={brief!r} revision={is_revision}")
 
