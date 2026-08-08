@@ -1,0 +1,113 @@
+"""
+TEMPORARY diagnostic endpoint — remove once the api.anthropic.com
+connection issue (Aug 8, 2026) is resolved. Not meant to stay in
+production long-term: it makes a real (tiny, ~5-token) live Anthropic API
+call and exposes some environment/network detail.
+
+Tests connectivity to api.anthropic.com at every layer, from lowest to
+highest, so a single hit tells us exactly where it breaks instead of
+guessing theory by theory:
+
+  1. DNS resolution  — and which address families come back (confirms
+     whether the IPv4-only patch in app/network_fix.py is actually active)
+  2. Raw TCP connect  — bypasses httpx and the SDK entirely
+  3. TLS handshake    — via a raw httpx GET, no Anthropic SDK involved
+  4. Full Anthropic SDK call — the exact code path production uses
+
+Each layer also runs the same test against a known-working comparison
+host (graph.facebook.com, which has succeeded in every failure we've
+seen so far) so we have a clean baseline in the same response.
+"""
+import asyncio
+import logging
+import socket
+import time
+
+import httpx
+from fastapi import APIRouter
+
+from app.anthropic_client import client
+from app.config import settings
+
+logger = logging.getLogger("socioburp.debug_network")
+router = APIRouter()
+
+
+def _dns_test(host: str) -> dict:
+    start = time.monotonic()
+    try:
+        results = socket.getaddrinfo(host, 443)
+        families = sorted({r[0].name if hasattr(r[0], "name") else str(r[0]) for r in results})
+        return {
+            "ok": True,
+            "elapsed_ms": round((time.monotonic() - start) * 1000, 1),
+            "families_returned": families,
+            "resolved_addresses": [r[4][0] for r in results],
+        }
+    except Exception as e:
+        return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
+
+
+async def _tcp_connect_test(host: str, port: int = 443, timeout: float = 8.0) -> dict:
+    start = time.monotonic()
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        peer = writer.get_extra_info("peername")
+        writer.close()
+        await writer.wait_closed()
+        return {"ok": True, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "connected_to": str(peer)}
+    except Exception as e:
+        return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
+
+
+async def _https_get_test(url: str, timeout: float = 8.0) -> dict:
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as http_client:
+            resp = await http_client.get(url)
+        return {"ok": True, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "status_code": resp.status_code}
+    except Exception as e:
+        return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
+
+
+async def _anthropic_sdk_test() -> dict:
+    start = time.monotonic()
+    try:
+        response = await client.messages.create(
+            model=settings.CLAUDE_INTENT_MODEL,
+            max_tokens=5,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        return {"ok": True, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "response_id": response.id}
+    except Exception as e:
+        return {"ok": False, "elapsed_ms": round((time.monotonic() - start) * 1000, 1), "error": f"{type(e).__name__}: {e}"}
+
+
+@router.get("/debug/network-check")
+async def network_check():
+    """
+    Hit this directly from a browser or curl — no auth, temporary only.
+    Returns every layer's result for api.anthropic.com side-by-side with
+    the same tests against graph.facebook.com (our known-working baseline).
+    """
+    results = {
+        "1_dns_resolution": {
+            "anthropic": _dns_test("api.anthropic.com"),
+            "facebook_baseline": _dns_test("graph.facebook.com"),
+        },
+    }
+
+    results["2_raw_tcp_connect"] = {
+        "anthropic": await _tcp_connect_test("api.anthropic.com"),
+        "facebook_baseline": await _tcp_connect_test("graph.facebook.com"),
+    }
+
+    results["3_https_get_no_sdk"] = {
+        "anthropic": await _https_get_test("https://api.anthropic.com/"),
+        "facebook_baseline": await _https_get_test("https://graph.facebook.com/"),
+    }
+
+    results["4_full_anthropic_sdk_call"] = await _anthropic_sdk_test()
+
+    logger.info("Network diagnostic run: %s", results)
+    return results
