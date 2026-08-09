@@ -82,32 +82,29 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
 
             # If the very first message already describes a real creative
             # request ("Create a Diwali offer post, 20% off") rather than
-            # just a greeting ("hi"), don't force the generic "what's your
-            # business name?" opener with no acknowledgment of what they
-            # actually asked for. We still need name/industry/etc. before a
-            # *good* creative can be produced, so the question sequence
-            # itself is unchanged -- but the request is remembered
+            # just a greeting ("hi"), the request is remembered
             # (Business.pending_first_request) and auto-generated the
             # moment onboarding finishes, so the client never has to repeat
-            # themselves. See the "awaiting_tone" branch below.
-            is_direct_request = False
+            # themselves. See the "awaiting_tone" branch below. The welcome
+            # text itself is the same either way -- it already covers "you
+            # can always just message me if there's anything you'd like to
+            # discuss in specific", so no separate acknowledgment variant
+            # is needed.
             if msg.text and msg.text.strip():
                 intent_result = await intent_engine.classify(msg.text)
-                is_direct_request = intent_result["intent"] == "GENERATE"
+                if intent_result["intent"] == "GENERATE":
+                    biz.pending_first_request = msg.text.strip()
 
-            if is_direct_request:
-                biz.pending_first_request = msg.text.strip()
-                welcome = await i18n.t(
-                    "welcome_direct_request", language,
-                    "👋 Hi, I'm Maya — your creative partner at SocioBurp! Got it, I can make "
-                    "that for you 🎉\n\nQuick setup first (30 seconds) — what's your business name?",
-                )
-            else:
-                welcome = await i18n.t(
-                    "welcome", language,
-                    "👋 Hi, I'm Maya — your creative partner at SocioBurp! I'll help you create "
-                    "branded social media content in seconds.\n\nFirst — what's your business name?",
-                )
+            welcome = await i18n.t(
+                "welcome", language,
+                "Hi, I'm Maya. 👋\n"
+                "I'll help keep your business visible online — without you having to "
+                "figure out things on your own daily.\n"
+                "First, I'm going to learn a little about your business and how you "
+                "like it to look.\n"
+                "You can always just message me if there's anything you'd like to "
+                "discuss in specific.",
+            )
             if language != "en":
                 note = await i18n.t(
                     "language_note", language,
@@ -289,12 +286,32 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             pending_request = biz.pending_first_request
             biz.pending_first_request = None
 
+            # Extract into a plain BusinessContext while biz/profile are
+            # still attached -- reflect_understanding() runs after this
+            # block commits, by which point touching these ORM objects
+            # directly would raise DetachedInstanceError.
+            from app.engine.context import BusinessContext
+            ctx = BusinessContext(
+                name=biz.name,
+                industry=biz.industry,
+                tone=profile.tone,
+                primary_color=profile.primary_color,
+                secondary_color=profile.secondary_color,
+                target_audience=profile.target_audience,
+                language=language,
+                industry_style=industry_research.get_cached_style(biz.industry),
+            )
+
             # Commit now, not just at the end of this `with` block -- the
             # state transition, cleared pending_first_request, and signup
             # credits must be durable and visible before we hand off to
             # orchestrator.generate() below, which opens its own fresh
             # session and would otherwise see pre-commit (stale) data.
             db.commit()
+
+            from app.engine import brand_reflection
+            reflection = await brand_reflection.reflect_understanding(ctx)
+            await send_text(phone, reflection)
 
             if pending_request:
                 done_msg = await i18n.t(

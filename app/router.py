@@ -32,6 +32,13 @@ from app import onboarding, credits, payments, persona, i18n
 
 logger = logging.getLogger("socioburp.router")
 
+# Bare greetings from an already-onboarded client -- "hi" with no actual
+# request in it. Deliberately a plain keyword set, not an intent-classifier
+# call: this file is a plain decision tree by design (see module docstring),
+# and a returning user just saying hello is exactly the cheap, unambiguous
+# case that doesn't need a Claude call to recognize.
+BARE_GREETINGS = {"hi", "hey", "hello", "hii", "hiii", "heya", "hola", "yo"}
+
 _business_locks: dict[uuid.UUID, asyncio.Lock] = {}
 _locks_registry_lock = asyncio.Lock()  # protects creation of new per-business locks only
 
@@ -93,6 +100,15 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
 
     # --- Global keywords, available any time post-onboarding ---
     text_lower = (msg.text or "").strip().lower()
+
+    # A returning user (already onboarded, hence past the state check
+    # above) saying just "hi" gets a short, direct prompt -- never routed
+    # back into onboarding (that only ever happens for a business with no
+    # profile yet, per the state check above) and never left to fall
+    # through to the generic OTHER-intent fallback in orchestrator.generate().
+    if text_lower in BARE_GREETINGS:
+        await send_text(msg.sender, "What do you want to create today? 🎨")
+        return
 
     if persona.is_identity_question(msg.text or ""):
         with get_session() as db:

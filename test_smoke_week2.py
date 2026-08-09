@@ -114,6 +114,16 @@ async def fake_build(ctx, user_brief):
 prompt_builder.build = fake_build
 orchestrator.prompt_builder.build = fake_build
 
+from app.engine import brand_reflection  # noqa: E402
+
+
+async def fake_reflect_first_result(ctx):
+    return "I've got a pretty good idea of your brand now.\nThere's one thing I think we can improve:\n(mocked observation)\nSo I want to try something different.\nGive me a moment."
+
+
+brand_reflection.reflect_first_result = fake_reflect_first_result
+orchestrator.brand_reflection.reflect_first_result = fake_reflect_first_result
+
 # --- Monkeypatch image generation (no real API call, no real cost) ---
 from app.engine import image_gen  # noqa: E402
 

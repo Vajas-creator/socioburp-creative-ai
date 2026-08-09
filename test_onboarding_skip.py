@@ -3,14 +3,16 @@ Test for the onboarding "skip the guided flow" path (app/onboarding.py,
 state == "new"): if the very first message already describes a real
 creative request instead of just being a greeting, it's remembered
 (Business.pending_first_request) and auto-generated the moment onboarding
-finishes, instead of the client being forced through a generic "what's
-your business name?" opener with no acknowledgment of what they asked for.
+finishes, instead of the client having to repeat themselves. The welcome
+text itself (Aug 2026 copy) is the same either way -- it already covers
+"you can always just message me if there's anything you'd like to discuss
+in specific" -- only whether the request gets stored differs.
 
 Covers:
-  - A plain greeting ("hi") gets the original generic welcome, no
+  - A plain greeting ("hi") gets the standard welcome, no
     pending_first_request stored.
-  - A specific first request gets an acknowledging welcome AND is stored
-    on pending_first_request -- the question sequence itself is unchanged
+  - A specific first request gets the SAME welcome text, but IS stored on
+    pending_first_request -- the question sequence itself is unchanged
     (still asks name/industry/etc.).
   - Once onboarding completes (tone selected), a stored pending_first_request
     is cleared and auto-generation runs with that original text -- the
@@ -90,6 +92,19 @@ async def fake_classify(user_message):
 
 onboarding.intent_engine.classify = fake_classify
 
+from app.engine import brand_reflection  # noqa: E402
+
+
+async def fake_reflect_understanding(ctx):
+    return f"Got it.\nYou run a {ctx.industry}.\nI'm going to remember that your brand needs to feel distinctive."
+
+
+# onboarding.py imports brand_reflection lazily (inside the function, at
+# call time) rather than at module level, so there's no onboarding.brand_reflection
+# attribute to patch -- patch the actual module instead, which is the same
+# object the lazy `from app.engine import brand_reflection` resolves to.
+brand_reflection.reflect_understanding = fake_reflect_understanding
+
 generate_calls = []
 
 
@@ -125,7 +140,7 @@ async def _complete_rest_of_onboarding(biz_id, phone):
 
 async def run():
     print("=" * 60)
-    print("TEST 1: plain greeting -> generic welcome, no pending_first_request")
+    print("TEST 1: plain greeting -> standard Maya welcome, no pending_first_request")
     print("=" * 60)
     sent.clear()
     phone = "919999999910"
@@ -139,12 +154,11 @@ async def run():
         assert biz.onboarding_state == "awaiting_name"
 
     welcome_text = sent[-1][1]
-    assert "what's your business name" in welcome_text.lower(), f"FAIL: expected the generic welcome, got {welcome_text!r}"
-    assert "Got it" not in welcome_text, f"FAIL: greeting should NOT get the acknowledgment welcome, got {welcome_text!r}"
-    print(f"PASS: greeting got the generic welcome, nothing stored: {welcome_text!r}\n")
+    assert welcome_text.startswith("Hi, I'm Maya."), f"FAIL: expected the standard Maya welcome, got {welcome_text!r}"
+    print(f"PASS: greeting got the standard welcome, nothing stored: {welcome_text!r}\n")
 
     print("=" * 60)
-    print("TEST 2: specific first request -> acknowledging welcome + stored on pending_first_request")
+    print("TEST 2: specific first request -> SAME welcome text, but stored on pending_first_request")
     print("=" * 60)
     sent.clear()
     phone2 = "919999999911"
@@ -161,8 +175,8 @@ async def run():
         assert biz.onboarding_state == "awaiting_name", "FAIL: question sequence should be unchanged (still asks name first)"
 
     welcome_text = sent[-1][1]
-    assert "Got it" in welcome_text, f"FAIL: expected an acknowledging welcome, got {welcome_text!r}"
-    print(f"PASS: specific request acknowledged and stored: welcome={welcome_text!r}\n")
+    assert welcome_text.startswith("Hi, I'm Maya."), f"FAIL: expected the same standard welcome, got {welcome_text!r}"
+    print(f"PASS: specific request got the same welcome, but was stored: welcome={welcome_text!r}\n")
 
     print("=" * 60)
     print("TEST 3: completing onboarding auto-generates the stored request, no repeat needed")
