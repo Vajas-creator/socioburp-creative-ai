@@ -65,6 +65,7 @@ from app.engine import caption as caption_engine
 from app.engine import quality
 from app.engine import learning
 from app.engine import industry_research
+from app.engine import brand_reflection
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
@@ -394,7 +395,15 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
     alone. None for text-only requests, or when the caller couldn't
     download it (see generate()).
     """
-    await send_text(phone, "🎨 Creating your design... (~30 seconds)")
+    if last_generation_id is None:
+        # This business's very first-ever generation -- a one-time,
+        # persona-voiced "here's what I've noticed" moment instead of the
+        # plain "Creating your design..." status line every generation
+        # after this one gets. See app/engine/brand_reflection.py.
+        first_result_msg = await brand_reflection.reflect_first_result(ctx)
+        await send_text(phone, first_result_msg)
+    else:
+        await send_text(phone, "🎨 Creating your design... (~30 seconds)")
 
     try:
         # --- Build the image prompt ---

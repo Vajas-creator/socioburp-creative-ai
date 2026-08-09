@@ -14,20 +14,29 @@ live docs before your first real run — image-gen APIs change fairly often.
 """
 import asyncio
 import base64
+import io
 import logging
 
 import httpx
+from PIL import Image
 
 from app.config import settings
 
 logger = logging.getLogger("socioburp.engine.image_gen")
 
+# Every generated creative must ship at exactly this size (~4:5 portrait),
+# regardless of what the provider's API natively supports. Locked in Aug
+# 2026 per product decision.
+TARGET_WIDTH = 1229
+TARGET_HEIGHT = 1536
+
 
 async def generate_images(prompt: str, count: int = 2, reference_image: bytes | None = None) -> list[bytes]:
     """
-    Returns a list of raw image bytes (PNG). Length may be less than `count`
-    if some generations fail — callers should handle a possibly-short list,
-    and treat an empty list as a full failure.
+    Returns a list of raw image bytes (PNG), each exactly TARGET_WIDTH x
+    TARGET_HEIGHT. Length may be less than `count` if some generations
+    fail — callers should handle a possibly-short list, and treat an
+    empty list as a full failure.
 
     reference_image: if given (e.g. a client's uploaded product photo),
     edits that image instead of generating a brand-new one from text alone
@@ -40,14 +49,55 @@ async def generate_images(prompt: str, count: int = 2, reference_image: bytes | 
         if reference_image is not None:
             edited = await _edit_openai(prompt, count, reference_image)
             if edited:
-                return edited
+                return [_fit_to_target_size(img) for img in edited]
             logger.warning("Image edit produced nothing usable — falling back to text-to-image generation")
-        return await _generate_openai(prompt, count)
+        results = await _generate_openai(prompt, count)
+        return [_fit_to_target_size(img) for img in results]
 
     raise NotImplementedError(
         f"Image provider '{settings.IMAGE_PROVIDER}' not implemented yet. "
         "Add a branch here after benchmarking (see Week 2 Day 10-11 in the build guide)."
     )
+
+
+def _fit_to_target_size(image_bytes: bytes) -> bytes:
+    """
+    Center-crops to the target aspect ratio (no stretching/distortion),
+    then uniformly upscales to exactly TARGET_WIDTH x TARGET_HEIGHT.
+
+    Why not just request the target size from the API directly: gpt-image-2
+    (like gpt-image-1) only accepts a fixed enum of sizes -- "1024x1024",
+    "1024x1536", "1536x1024", "auto" -- there's no way to request 1229x1536
+    directly, and neither portrait nor landscape option is close enough to
+    ~4:5 to crop losslessly (both are 2:3). Square has enough resolution in
+    both dimensions to center-crop to the exact target aspect first, then
+    scale up uniformly -- unlike a non-uniform resize, this never distorts
+    the image, only reframes and upscales it.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        target_ratio = TARGET_WIDTH / TARGET_HEIGHT
+        src_ratio = img.width / img.height
+
+        if src_ratio > target_ratio:
+            # Source is relatively wider than the target -- crop width.
+            crop_w = round(img.height * target_ratio)
+            left = (img.width - crop_w) // 2
+            img = img.crop((left, 0, left + crop_w, img.height))
+        elif src_ratio < target_ratio:
+            # Source is relatively taller than the target -- crop height.
+            crop_h = round(img.width / target_ratio)
+            top = (img.height - crop_h) // 2
+            img = img.crop((0, top, img.width, top + crop_h))
+
+        img = img.resize((TARGET_WIDTH, TARGET_HEIGHT), Image.LANCZOS)
+
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        logger.exception("Failed to fit generated image to target size — returning it unmodified")
+        return image_bytes
 
 
 async def _generate_openai(prompt: str, count: int) -> list[bytes]:

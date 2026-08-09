@@ -27,7 +27,9 @@ social media marketing creatives for Indian small businesses.
 Given the business profile and the user's request, write ONE detailed image prompt.
 
 Rules:
-- 1080x1080 Instagram post format
+- 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
+  a square. Compose for a taller-than-wide canvas: don't center everything
+  as if for a 1:1 crop, leave room above and below the focal subject.
 - Specify: layout, headline text (short, punchy, in quotes), color scheme using
   the brand's exact hex colors if provided, visual style matching the brand
   tone, clear empty space in the bottom-right corner for logo placement
@@ -98,7 +100,7 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
         return {
             "image_prompt": (
                 f"A clean, professional Instagram marketing post for a {ctx.industry or 'local'} "
-                f"business, 1080x1080, modern design, based on this request: {user_brief}"
+                f"business, 1229x1536 portrait format, modern design, based on this request: {user_brief}"
             ),
             "headline_text": user_brief[:40],
             "notes_for_caption": user_brief,
