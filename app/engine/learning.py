@@ -171,7 +171,22 @@ async def record_accepted_direction(
         # tracking actually picks this up.
         profile.extras = extras
         logger.info("Recorded accepted direction for business=%s: %r", business_id, note)
+
+        # Instrumentation only, no behavior change -- first REAL accept
+        # signal ever for this business (not just "a creative was
+        # delivered"). Checked before _log_event() below writes this
+        # generation's own 'recorded' row, so the count reflects prior
+        # acceptances only.
+        is_first_ever_accept = (
+            db.query(LearningEvent)
+            .filter(LearningEvent.business_id == business_id, LearningEvent.event_type == "recorded")
+            .first()
+            is None
+        )
     _log_event(business_id, generation_id, "recorded", quality_score)
+    if is_first_ever_accept:
+        from app import analytics
+        analytics.log_event(business_id, "first_creative_approved", generation_id=str(generation_id))
 
 
 async def _distill_preferences(business_name, business_industry, preferences: list[str]) -> str:

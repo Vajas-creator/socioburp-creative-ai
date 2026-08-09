@@ -26,6 +26,7 @@ class BusinessContext:
     style_summary: str | None = None  # distilled synthesis once learned_preferences has cycled a few times
     language: str = "en"  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml' — see app/i18n.py
     industry_style: str | None = None  # cached industry-wide trend research, see app/engine/industry_research.py
+    instagram_handle: str | None = None  # whatever the client sent when asked for their Instagram page — a handle/link only, NOT actual page content (nothing fetches or reads it)
 
     @property
     def has_logo(self) -> bool:

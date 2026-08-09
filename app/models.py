@@ -23,10 +23,11 @@ class Business(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     phone = Column(String(20), unique=True, nullable=False, index=True)  # WhatsApp number = identity
-    name = Column(String(200))
-    industry = Column(String(100))
-    onboarding_state = Column(String(50), default="new")  # new -> name -> industry -> logo -> colors -> tone -> done
-    instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting
+    name = Column(String(200))  # best-effort, extracted from their business-description answer; often NULL -- see app/onboarding.py
+    industry = Column(String(100))  # free text now (e.g. "handmade gifting business"), not a fixed category -- see app/onboarding.py
+    onboarding_state = Column(String(50), default="new")  # new -> awaiting_business_description -> awaiting_instagram -> done
+    instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting (auto-POSTING -- separate from instagram_handle below, which is just what the client told us during onboarding)
+    instagram_handle = Column(Text, nullable=True)  # whatever the client sent when asked for their Instagram page (handle, link, or just left as text) -- see app/onboarding.py's "awaiting_instagram" state
     regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased
     regens_used_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens actually used
     preferred_language = Column(String(10), nullable=True)  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml'; NULL = not yet detected, treated as 'en'
@@ -77,7 +78,9 @@ class Generation(Base):
     status = Column(String(20), default="pending")  # pending -> generating -> done -> failed -> blocked (budget cap hit)
     posted_to_instagram = Column(Boolean, nullable=False, default=False)
     # How this generation got triggered: 'specific_enough' | 'proposal_confirmed' |
-    # 'adjust_cap' | 'revision' | 'logo_free_revision'. Nullable for rows created
+    # 'adjust_cap' | 'revision' | 'logo_free_revision' | 'onboarding_complete'
+    # (auto-triggered the moment onboarding finishes, bypassing the concept-
+    # proposal gate -- see app/onboarding.py). Nullable for rows created
     # before this column existed. See app/engine/orchestrator.py.
     trigger_source = Column(String(30), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -124,6 +127,25 @@ class LearningEvent(Base):
     generation_id = Column(UUID(as_uuid=True), ForeignKey("generations.id"), nullable=True)
     event_type = Column(String(20), nullable=False)  # 'recorded' | 'skipped_quality' | 'skipped_no_profile' | 'skipped_free_revision' | 'distilled'
     quality_score = Column(Integer, nullable=True)  # the generation's score at the time of this event, if applicable
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class AnalyticsEvent(Base):
+    """
+    Activation-funnel instrumentation, per business. Deliberately separate
+    from LearningEvent (which is specifically about the accept/skip signal
+    for the learning loop) -- this is general product analytics: signup,
+    onboarding_completed, first_creative_approved, user_returned_voluntarily.
+    See app/analytics.py for the write side and the definition of each
+    event_type, especially user_returned_voluntarily (a heuristic, not a
+    literal session boundary -- there's no session concept in this app).
+    """
+    __tablename__ = "analytics_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), index=True)
+    event_type = Column(String(50), nullable=False, index=True)  # 'signup' | 'onboarding_completed' | 'first_creative_approved' | 'user_returned_voluntarily'
+    event_metadata = Column(JSONB, nullable=True)  # optional free-form context, e.g. {"industry": "bakery"}
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

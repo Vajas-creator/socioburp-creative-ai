@@ -6,10 +6,12 @@ Part A: color_discovery.extract_colors_from_image() — real API failure
   (fake key) fails safe to None, never crashes.
 Part B: industry_research — skips "other", skips if already cached, real
   API failure logs and swallows rather than raising.
-Part C: full onboarding walk — new -> name -> industry (fires research
-  task) -> logo (skip) -> color screenshot (mocked confident extraction)
-  -> color confirm YES -> tone -> done. A second walk covers the NO branch
-  falling through to manual hex entry.
+Part C: full onboarding walk (Aug 2026 2-question redesign) — new ->
+  awaiting_business_description (fires research task on the extracted
+  business_type) -> awaiting_instagram (screenshot -> colors extracted and
+  applied directly, no confirm step in this flow) -> done, auto-generation
+  triggered. A second walk covers sending an Instagram handle/link
+  (text, not a screenshot) instead -- stored, no color extraction attempted.
 """
 import sys
 import asyncio
@@ -98,7 +100,7 @@ async def part_b():
 
 async def part_c():
     print("=" * 60)
-    print("PART C: full onboarding walk with mocked color extraction")
+    print("PART C: full onboarding walk (2-question redesign) with mocked color extraction")
     print("=" * 60)
 
     from app.whatsapp import client as wa_client
@@ -107,20 +109,16 @@ async def part_c():
     async def fake_send_text(to, body):
         sent.append(("text", body))
 
-    async def fake_send_buttons(to, body, buttons):
-        sent.append(("buttons", body, buttons))
-
     async def fake_download_media(media_id):
         return b"fake screenshot bytes"
 
     wa_client.send_text = fake_send_text
-    wa_client.send_buttons = fake_send_buttons
     wa_client.download_media = fake_download_media
 
     from app import onboarding
     onboarding.send_text = fake_send_text
-    onboarding.send_buttons = fake_send_buttons
     onboarding.download_media = fake_download_media
+    onboarding.WELCOME_TO_QUESTION_DELAY_SECONDS = 0  # skip the real 1.5s pacing delay in tests
 
     async def fake_detect(text):
         return "en"
@@ -131,10 +129,10 @@ async def part_c():
     onboarding.i18n.detect_language = fake_detect
     onboarding.i18n.t = fake_t
 
-    async def fake_upload_logo(business_id, image_bytes):
-        return "https://fake-cdn.example.com/logo.png"
+    async def fake_classify(user_message):
+        return {"intent": "OTHER", "brief": user_message}
 
-    onboarding.upload_logo = fake_upload_logo
+    onboarding.intent_engine.classify = fake_classify
 
     research_calls = []
 
@@ -147,6 +145,24 @@ async def part_c():
         return {"primary_color": "#1A1A2E", "secondary_color": "#EAB308", "confident": True}
 
     onboarding.color_discovery.extract_colors_from_image = fake_extract_confident
+
+    async def fake_understand_business(description, language="en"):
+        return {
+            "business_type": "salon",
+            "brand_adjectives": "warm, inviting",
+            "business_name": None,
+            "message": "Got it.\nYou run a salon.\nI'm going to remember that your brand needs to feel warm, inviting — not like a mass-produced catalogue.\nOne more thing...",
+        }
+
+    onboarding.brand_reflection.understand_business = fake_understand_business
+
+    generation_calls = []
+
+    async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source=None, reference_image=None):
+        generation_calls.append((brief, trigger_source, ctx.primary_color))
+
+    import app.engine.orchestrator as orch
+    orch._run_generation = fake_run_generation
 
     from app.schemas import IncomingMessage
 
@@ -167,64 +183,49 @@ async def part_c():
             return (p.primary_color, p.secondary_color) if p else (None, None)
 
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="hi"))
-    assert state() == "awaiting_name", f"FAIL: {state()}"
-
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="Test Bakery"))
-    assert state() == "awaiting_industry", f"FAIL: {state()}"
-
-    sent.clear()
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="button", button_id="salon", text="Salon/Beauty"))
     await asyncio.sleep(0.05)
-    assert state() == "awaiting_logo", f"FAIL: {state()}"
-    assert research_calls == ["salon"], f"FAIL: expected industry research fired for 'salon', got {research_calls}"
-    print("PASS: industry selection correctly fired the background research task\n")
-
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
-    assert state() == "awaiting_color_screenshot", f"FAIL: {state()}"
-    print("PASS: logo skip correctly advanced to color screenshot request\n")
+    assert state() == "awaiting_business_description", f"FAIL: {state()}"
 
     sent.clear()
+    research_calls.clear()
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a hair and beauty salon"))
+    await asyncio.sleep(0.05)  # let the fire-and-forget research task actually run
+    assert state() == "awaiting_instagram", f"FAIL: {state()}"
+    assert research_calls == ["salon"], f"FAIL: expected industry research fired for the extracted business_type, got {research_calls}"
+    with get_session() as db:
+        assert db.query(Business).filter(Business.id == biz_id).first().industry == "salon"
+    print("PASS: business description extracted business_type='salon', fired background research\n")
+
+    sent.clear()
+    generation_calls.clear()
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="image", media_id="fake_media_123"))
-    assert state() == "awaiting_color_confirm", f"FAIL: {state()}"
-    assert colors() == ("#1A1A2E", "#EAB308"), f"FAIL: expected extracted colors saved immediately, got {colors()}"
-    assert any(kind == "buttons" for kind, *_ in sent), f"FAIL: expected a confirm-buttons message, got {sent}"
-    print(f"PASS: confident color extraction saved colors and asked for confirmation: {colors()}\n")
-
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="button", button_id="yes_colors", text="Yes, that's right"))
-    assert state() == "awaiting_tone", f"FAIL: expected YES to advance straight to tone, got {state()}"
-    assert colors() == ("#1A1A2E", "#EAB308"), "FAIL: colors should remain the extracted ones after confirming YES"
-    print("PASS: confirming YES kept the extracted colors and advanced to tone\n")
-
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="button", button_id="premium", text="Premium"))
     assert state() == "done", f"FAIL: {state()}"
-    print("PASS: full flow reached 'done'\n")
+    assert colors() == ("#1A1A2E", "#EAB308"), f"FAIL: expected extracted colors applied directly (no confirm step), got {colors()}"
+    assert len(generation_calls) == 1, f"FAIL: expected auto-generation triggered once onboarding completes, got {generation_calls}"
+    assert generation_calls[0][1] == "onboarding_complete", f"FAIL: expected trigger_source='onboarding_complete', got {generation_calls[0]}"
+    assert generation_calls[0][2] == "#1A1A2E", "FAIL: the auto-generation's context should carry the just-extracted colors"
+    print(f"PASS: screenshot -> colors applied directly (no confirm step): {colors()}, auto-generation triggered: {generation_calls[0]}\n")
 
-    print("--- Second walk: NO branch falls through to manual hex entry ---")
+    print("--- Second walk: Instagram handle sent as TEXT instead of a screenshot ---")
     phone2 = "919999999984"
     with get_session() as db:
-        biz2 = Business(phone=phone2, onboarding_state="awaiting_color_screenshot", industry="restaurant")
+        biz2 = Business(phone=phone2, onboarding_state="awaiting_instagram", industry="restaurant")
         db.add(biz2)
         db.flush()
         biz2_id = biz2.id
         db.add(BrandProfile(business_id=biz2_id))
 
-    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="image", media_id="fake_media_456"))
-    with get_session() as db:
-        assert db.query(Business).filter(Business.id == biz2_id).first().onboarding_state == "awaiting_color_confirm"
-
-    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="button", button_id="no_colors", text="No, let me specify"))
-    with get_session() as db:
-        biz2_row = db.query(Business).filter(Business.id == biz2_id).first()
-        assert biz2_row.onboarding_state == "awaiting_color_manual", f"FAIL: expected manual fallback state, got {biz2_row.onboarding_state}"
-    print("PASS: rejecting extracted colors correctly fell through to the manual hex-code question\n")
-
-    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="#FF5733"))
+    generation_calls.clear()
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="instagram.com/testrestaurant"))
     with get_session() as db:
         biz2_row = db.query(Business).filter(Business.id == biz2_id).first()
         profile2 = db.query(BrandProfile).filter(BrandProfile.business_id == biz2_id).first()
-        assert biz2_row.onboarding_state == "awaiting_tone", f"FAIL: {biz2_row.onboarding_state}"
-        assert profile2.primary_color == "#FF5733", f"FAIL: manual hex not saved, got {profile2.primary_color}"
-    print("PASS: manually-entered hex code correctly overrode the (rejected) extracted color\n")
+        assert biz2_row.onboarding_state == "done", f"FAIL: {biz2_row.onboarding_state}"
+        assert biz2_row.instagram_handle == "instagram.com/testrestaurant", f"FAIL: handle not stored, got {biz2_row.instagram_handle}"
+        assert profile2.primary_color is None, "FAIL: no screenshot was sent, no colors should have been extracted"
+        stored_handle = biz2_row.instagram_handle
+    assert len(generation_calls) == 1, f"FAIL: expected auto-generation triggered here too, got {generation_calls}"
+    print(f"PASS: text handle stored ({stored_handle!r}), no color extraction attempted, still auto-generated\n")
 
     print("ALL TESTS PASSED")
 

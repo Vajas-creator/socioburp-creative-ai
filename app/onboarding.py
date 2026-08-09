@@ -1,25 +1,34 @@
 """
-Onboarding state machine. One question per message, state persisted on the
-Business row so a user can go silent mid-flow and resume later without
-losing progress.
+Onboarding state machine. Persisted on the Business row so a client can go
+silent mid-flow and resume later without losing progress.
 
-States: new -> awaiting_name -> awaiting_industry -> awaiting_logo ->
-        awaiting_color_screenshot -> [awaiting_color_confirm] -> awaiting_color_manual
-        -> awaiting_tone -> done
+States: new -> awaiting_business_description -> awaiting_instagram -> done
 
-Color discovery (Aug 2026): replaces the old "type a hex code" question.
-Ask for an IG screenshot (or logo already on file) -> Claude vision
-extracts candidate brand colors -> client explicitly confirms or rejects
-(never auto-applied — see app/engine/color_discovery.py for why). 'skip'
-or a rejected suggestion falls through to the original manual hex-code
-question, so nothing is lost versus the old flow.
+Redesigned Aug 2026: cut from a 5-question flow (name, industry, logo,
+colors, tone) down to 2 open-ended questions -- what does your business
+do, and what's your Instagram -- staged one at a time, short messages
+only, no feature menu upfront. business_type/brand_adjectives/business_name
+are all extracted from the client's own free-text answer via Claude (see
+app/engine/brand_reflection.py), not fixed button categories --
+Business.industry is now free text, not a restaurant/salon/other enum.
 
-Industry research (Aug 2026): fired as a background asyncio task right
-after industry is selected, NOT awaited inline — a live web-search-backed
-Claude call can take several seconds and there's no reason to block the
-conversation on it. By the time onboarding finishes (logo, color, tone
-still to go), the research is very likely already cached. See
-app/engine/industry_research.py.
+Logo/manual-color/tone collection (previously mandatory questions) is no
+longer part of onboarding. If the client uploads an Instagram screenshot
+when asked for their page, real brand colors ARE extracted from it (same
+underlying capability as the old color-discovery flow, see
+app/engine/color_discovery.py) -- but WITHOUT a separate confirm step this
+time, a deliberate break from that module's original "never silently
+apply" principle, made specifically for this lower-friction flow. Logo
+upload and brand-tone selection have no equivalent question here at all;
+BrandProfile.logo_url and .tone simply stay unset for onboarding-only
+clients -- every consumer already handles that gracefully (has_logo is
+False, tone is optional context everywhere it's read), nothing breaks.
+
+Industry research (background trend caching, see
+app/engine/industry_research.py) still fires after business_type is
+extracted, keyed on that free-text string -- cache hit rate is lower now
+than with 3 fixed categories, but each business still gets a background
+enrichment pass with no user-facing wait.
 
 Language: on the very first contact (state == "new"), whatever the client
 typed to trigger this conversation gets run through i18n.detect_language()
@@ -32,23 +41,26 @@ import uuid
 from app.db import get_session
 from app.models import Business, BrandProfile
 from app.schemas import IncomingMessage
-from app.whatsapp.client import send_text, send_buttons, download_media
-from app.storage import upload_logo
+from app.whatsapp.client import send_text, download_media
 from app.config import settings
 from app import i18n
 from app.engine import industry_research, color_discovery
 from app.engine import intent as intent_engine
+from app.engine import brand_reflection
 
 logger = logging.getLogger("socioburp.onboarding")
-
-INDUSTRY_BUTTONS = [("restaurant", "Restaurant"), ("salon", "Salon/Beauty"), ("other", "Other")]
-TONE_BUTTONS = [("premium", "Premium"), ("friendly", "Friendly"), ("bold", "Bold")]
-COLOR_CONFIRM_BUTTONS = [("yes_colors", "Yes, that's right"), ("no_colors", "No, let me specify")]
 
 LANGUAGE_OVERRIDE_KEYWORDS = {
     "english": "en", "hindi": "hi", "hinglish": "hinglish",
     "tamil": "ta", "telugu": "te", "kannada": "kn", "malayalam": "ml",
 }
+
+INSTAGRAM_SKIP_WORDS = ("skip", "no", "none", "don't have one", "dont have one", "n/a", "na")
+
+# A short pause between the welcome message and the first real question --
+# staged, conversational pacing rather than a wall of text at once. Module
+# level so tests can patch it to 0 and skip the real wall-clock delay.
+WELCOME_TO_QUESTION_DELAY_SECONDS = 1.5
 
 
 async def advance(business_id: uuid.UUID, msg: IncomingMessage):
@@ -85,11 +97,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             # just a greeting ("hi"), the request is remembered
             # (Business.pending_first_request) and auto-generated the
             # moment onboarding finishes, so the client never has to repeat
-            # themselves. See the "awaiting_tone" branch below. The welcome
-            # text itself is the same either way -- it already covers "you
-            # can always just message me if there's anything you'd like to
-            # discuss in specific", so no separate acknowledgment variant
-            # is needed.
+            # themselves. See the "awaiting_instagram" branch below.
             if msg.text and msg.text.strip():
                 intent_result = await intent_engine.classify(msg.text)
                 if intent_result["intent"] == "GENERATE":
@@ -102,8 +110,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                 "figure out things on your own daily.\n"
                 "First, I'm going to learn a little about your business and how you "
                 "like it to look.\n"
-                "You can always just message me if there's anything you'd like to "
-                "discuss in specific.",
+                "You can always just message me like you would a person.",
             )
             if language != "en":
                 note = await i18n.t(
@@ -113,171 +120,71 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                 )
                 welcome = f"{welcome}\n\n{note}"
             await send_text(phone, welcome)
-            biz.onboarding_state = "awaiting_name"
-            return
 
-        if state == "awaiting_name":
-            if not msg.text:
-                msg_text = await i18n.t("name_needs_text", language, "Please type your business name as text 🙂")
-                await send_text(phone, msg_text)
-                return
-            biz.name = msg.text.strip()
-            prompt = await i18n.t("ask_industry", language, "Great! What type of business is it?")
-            await send_buttons(phone, prompt, INDUSTRY_BUTTONS)
-            biz.onboarding_state = "awaiting_industry"
-            return
+            await asyncio.sleep(WELCOME_TO_QUESTION_DELAY_SECONDS)
 
-        if state == "awaiting_industry":
-            industry = msg.button_id or (msg.text or "").strip().lower()
-            if industry not in ("restaurant", "salon", "other"):
-                prompt = await i18n.t("pick_option", language, "Please pick one of the options below:")
-                await send_buttons(phone, prompt, INDUSTRY_BUTTONS)
-                return
-            biz.industry = industry
-
-            # Fire-and-forget — runs concurrently with the rest of onboarding,
-            # never blocks this reply. No-ops internally for "other" or if
-            # already cached.
-            asyncio.create_task(industry_research.research_and_cache_if_needed(industry))
-
-            ask_logo = await i18n.t(
-                "ask_logo", language,
-                "Perfect. Now send me your logo as an image 📎\n\n"
-                "(Or type 'skip' if you don't have one handy — you can add it later)",
+            ask_business = await i18n.t(
+                "ask_business_description", language,
+                "Let's start simple. What does your business do?",
             )
-            await send_text(phone, ask_logo)
-            biz.onboarding_state = "awaiting_logo"
+            await send_text(phone, ask_business)
+            biz.onboarding_state = "awaiting_business_description"
             return
 
-        if state == "awaiting_logo":
-            if msg.type == "image" and msg.media_id:
-                try:
-                    image_bytes = await download_media(msg.media_id)
-                    logo_url = upload_logo(business_id, image_bytes)
-                    profile.logo_url = logo_url
-                    saved = await i18n.t("logo_saved", language, "Logo saved! ✅")
-                    await send_text(phone, saved)
-                except Exception:
-                    logger.exception("Logo upload failed for business=%s", business_id)
-                    failed = await i18n.t(
-                        "logo_failed", language,
-                        "Hmm, couldn't save that logo. Let's continue without it for now.",
-                    )
-                    await send_text(phone, failed)
-            elif text_lower == "skip":
-                skipped = await i18n.t("logo_skipped", language, "No problem, you can add a logo anytime later.")
-                await send_text(phone, skipped)
-            else:
-                retry = await i18n.t("logo_retry", language, "Please send your logo as an image, or type 'skip'.")
+        if state == "awaiting_business_description":
+            if not msg.text or not msg.text.strip():
+                retry = await i18n.t(
+                    "business_description_needs_text", language,
+                    "Just tell me a bit about your business as text 🙂",
+                )
                 await send_text(phone, retry)
                 return
 
-            ask_screenshot = await i18n.t(
-                "ask_color_screenshot", language,
-                "Now, send me a screenshot of your Instagram profile (or your website) "
-                "and I'll figure out your brand colors from it 🎨\n\n"
-                "(Or type 'skip' to enter a hex code manually instead)",
+            description = msg.text.strip()
+            understood = await brand_reflection.understand_business(description, language)
+
+            biz.industry = understood["business_type"]
+            if understood["business_name"]:
+                biz.name = understood["business_name"]
+
+            # Fire-and-forget -- runs concurrently with the rest of
+            # onboarding, never blocks this reply. No-ops internally if
+            # already cached for this exact business_type string.
+            asyncio.create_task(industry_research.research_and_cache_if_needed(understood["business_type"]))
+
+            await send_text(phone, understood["message"])
+
+            ask_instagram = await i18n.t(
+                "ask_instagram", language,
+                "Send me your Instagram page here. I'll study how your brand "
+                "currently looks before I create anything.",
             )
-            await send_text(phone, ask_screenshot)
-            biz.onboarding_state = "awaiting_color_screenshot"
+            await send_text(phone, ask_instagram)
+            biz.onboarding_state = "awaiting_instagram"
             return
 
-        if state == "awaiting_color_screenshot":
-            if text_lower == "skip":
-                ask_hex = await i18n.t(
-                    "ask_color_manual", language,
-                    "No problem — what's your main brand color? Send a hex code like "
-                    "#E91E63 (or type 'skip' if you're not sure)",
-                )
-                await send_text(phone, ask_hex)
-                biz.onboarding_state = "awaiting_color_manual"
-                return
-
+        if state == "awaiting_instagram":
             if msg.type == "image" and msg.media_id:
+                # A real screenshot -- extract real brand colors from it,
+                # same underlying capability as the old color-discovery
+                # flow, applied directly. No separate confirm step here:
+                # the whole point of this shorter flow is fewer questions,
+                # a deliberate break from color_discovery.py's original
+                # "never silently apply" caution (see module docstring).
                 try:
                     image_bytes = await download_media(msg.media_id)
+                    extracted = await color_discovery.extract_colors_from_image(image_bytes)
+                    if extracted and extracted.get("confident") and extracted.get("primary_color"):
+                        profile.primary_color = extracted["primary_color"]
+                        profile.secondary_color = extracted.get("secondary_color")
                 except Exception:
-                    logger.exception("Screenshot download failed for business=%s", business_id)
-                    image_bytes = None
+                    logger.exception("Instagram screenshot processing failed for business=%s", business_id)
+            elif text_lower not in INSTAGRAM_SKIP_WORDS and msg.text and msg.text.strip():
+                biz.instagram_handle = msg.text.strip()
+            # A skip/decline or empty reply: proceed anyway -- unlike the
+            # business-description question, this one never blocks
+            # onboarding completion.
 
-                extracted = await color_discovery.extract_colors_from_image(image_bytes) if image_bytes else None
-
-                if extracted and extracted.get("confident") and extracted.get("primary_color"):
-                    profile.primary_color = extracted["primary_color"]
-                    profile.secondary_color = extracted.get("secondary_color")
-                    secondary_note = f" and {extracted['secondary_color']}" if extracted.get("secondary_color") else ""
-                    confirm_msg = await i18n.t(
-                        "color_confirm", language,
-                        "Based on that, I'm seeing {primary}{secondary_note} as your brand colors. Sound right?",
-                        primary=extracted["primary_color"], secondary_note=secondary_note,
-                    )
-                    await send_buttons(phone, confirm_msg, COLOR_CONFIRM_BUTTONS)
-                    biz.onboarding_state = "awaiting_color_confirm"
-                    return
-
-                # Extraction failed or wasn't confident — fall through to manual, same as 'skip'
-                unclear = await i18n.t(
-                    "color_unclear", language,
-                    "I couldn't confidently pick out brand colors from that 🙏 What's your "
-                    "main brand color? Send a hex code like #E91E63 (or type 'skip')",
-                )
-                await send_text(phone, unclear)
-                biz.onboarding_state = "awaiting_color_manual"
-                return
-
-            retry = await i18n.t(
-                "color_screenshot_retry", language,
-                "Please send a screenshot as an image, or type 'skip'.",
-            )
-            await send_text(phone, retry)
-            return
-
-        if state == "awaiting_color_confirm":
-            choice = msg.button_id or text_lower
-            if choice == "yes_colors":
-                ask_tone = await i18n.t("ask_tone", language, "Last question — what's your brand vibe?")
-                await send_buttons(phone, ask_tone, TONE_BUTTONS)
-                biz.onboarding_state = "awaiting_tone"
-                return
-            if choice == "no_colors":
-                ask_hex = await i18n.t(
-                    "ask_color_manual", language,
-                    "No problem — what's your main brand color? Send a hex code like "
-                    "#E91E63 (or type 'skip' if you're not sure)",
-                )
-                await send_text(phone, ask_hex)
-                biz.onboarding_state = "awaiting_color_manual"
-                return
-            prompt = await i18n.t("pick_option", language, "Please pick one of the options below:")
-            await send_buttons(phone, prompt, COLOR_CONFIRM_BUTTONS)
-            return
-
-        if state == "awaiting_color_manual":
-            text = (msg.text or "").strip()
-            if text.lower() == "skip":
-                pass
-            elif text.startswith("#") and len(text) == 7:
-                profile.primary_color = text.upper()
-            else:
-                bad_color = await i18n.t(
-                    "bad_color", language,
-                    "That doesn't look like a hex color. Try e.g. #E91E63, or type 'skip'.",
-                )
-                await send_text(phone, bad_color)
-                return
-
-            ask_tone = await i18n.t("ask_tone", language, "Last question — what's your brand vibe?")
-            await send_buttons(phone, ask_tone, TONE_BUTTONS)
-            biz.onboarding_state = "awaiting_tone"
-            return
-
-        if state == "awaiting_tone":
-            tone = msg.button_id or (msg.text or "").strip().lower()
-            if tone not in ("premium", "friendly", "bold"):
-                prompt = await i18n.t("pick_option", language, "Please pick one of the options below:")
-                await send_buttons(phone, prompt, TONE_BUTTONS)
-                return
-            profile.tone = tone
             biz.onboarding_state = "done"
 
             from app.credits import add_credits
@@ -285,9 +192,14 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
 
             pending_request = biz.pending_first_request
             biz.pending_first_request = None
+            fallback_brief = (
+                f"Create an introductory social media post for this {biz.industry} business"
+                if biz.industry else "Create an introductory social media post for this business"
+            )
+            brief = pending_request or fallback_brief
 
             # Extract into a plain BusinessContext while biz/profile are
-            # still attached -- reflect_understanding() runs after this
+            # still attached -- everything downstream runs after this
             # block commits, by which point touching these ORM objects
             # directly would raise DetachedInstanceError.
             from app.engine.context import BusinessContext
@@ -300,42 +212,36 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                 target_audience=profile.target_audience,
                 language=language,
                 industry_style=industry_research.get_cached_style(biz.industry),
+                instagram_handle=biz.instagram_handle,
             )
 
             # Commit now, not just at the end of this `with` block -- the
             # state transition, cleared pending_first_request, and signup
             # credits must be durable and visible before we hand off to
-            # orchestrator.generate() below, which opens its own fresh
+            # the generation pipeline below, which opens its own fresh
             # session and would otherwise see pre-commit (stale) data.
             db.commit()
 
-            from app.engine import brand_reflection
-            reflection = await brand_reflection.reflect_understanding(ctx)
-            await send_text(phone, reflection)
+            from app import analytics
+            analytics.log_event(business_id, "onboarding_completed", industry=biz.industry)
 
-            if pending_request:
-                done_msg = await i18n.t(
-                    "onboarding_done_with_request", language,
-                    "🎉 You're all set! You have {credits} free credits.\n\n"
-                    "Now let's make what you asked for...",
-                    credits=settings.SIGNUP_BONUS_CREDITS,
-                )
-            else:
-                done_msg = await i18n.t(
-                    "onboarding_done", language,
-                    "🎉 You're all set! You have {credits} free credits.\n\n"
-                    "Try: *Create a weekend offer post*\n\n"
-                    "Anytime, you can also type:\n"
-                    "• *credits* — check your balance\n"
-                    "• *history* — see recent creatives\n"
-                    "• *topup* — buy more credits",
-                    credits=settings.SIGNUP_BONUS_CREDITS,
-                )
-            await send_text(phone, done_msg)
-
-            if pending_request:
-                from app.engine.orchestrator import generate as run_generation
-                await run_generation(business_id, IncomingMessage(sender=phone, type="text", text=pending_request))
+            # Call _run_generation() directly rather than the normal
+            # generate() entry point -- generate() would run this brief
+            # through the concept-proposal gate, which could decide it
+            # needs more detail and ask ANOTHER question instead of
+            # generating. Maya just said "Give me a moment" -- that's a
+            # promise of immediate action, not another question, so this
+            # bypasses the gate the same way the ADJUST-round-cap escape
+            # hatch in orchestrator.generate() already does. last_generation_id
+            # is genuinely None here (this business's first-ever
+            # generation), which is also what makes reflect_first_result()
+            # fire automatically inside _run_generation().
+            from app.engine.orchestrator import _run_generation
+            await _run_generation(
+                business_id, phone, ctx, brief, brief,
+                last_generation_id=None, is_revision=False,
+                trigger_source="onboarding_complete",
+            )
             return
 
         logger.warning("Unknown onboarding state '%s' for business=%s", state, business_id)

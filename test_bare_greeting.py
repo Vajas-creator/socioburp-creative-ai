@@ -105,7 +105,7 @@ async def run():
         await router._process_message(biz_id, IncomingMessage(sender=phone, type="text", text=greeting))
 
         assert len(sent) == 1, f"FAIL ({greeting!r}): expected exactly 1 message, got {sent}"
-        assert "create" in sent[0].lower(), f"FAIL ({greeting!r}): expected the short creative prompt, got {sent[0]!r}"
+        assert sent[0] == "Hey! Want today's post? I've got an idea. 💡", f"FAIL ({greeting!r}): expected the short creative prompt, got {sent[0]!r}"
         assert onboarding_calls == [], f"FAIL ({greeting!r}): onboarding should NOT run for a returning user, got {onboarding_calls}"
         assert generate_calls == [], f"FAIL ({greeting!r}): generate() should NOT run for a bare greeting, got {generate_calls}"
         print(f"PASS ({greeting!r}): {sent[0]!r}")

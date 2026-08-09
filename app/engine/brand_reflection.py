@@ -5,22 +5,25 @@ client-facing message in this codebase that needs to sound like an actual
 person (concept_proposal.py's proposals, caption.py) is written by Claude,
 not string-substituted. See app/persona.py for the shared voice.
 
-reflect_understanding() — sent once, right when onboarding completes
-(app/onboarding.py's "awaiting_tone" branch): "Got it. You run a X. I'm
-going to remember that your brand needs to feel Y..." Establishes that
-Maya actually processed what they told her, not just recorded it.
+understand_business() — sent once, right after a client answers "What
+does your business do?" (app/onboarding.py's "awaiting_business_description"
+state): "Got it. You run a X. I'm going to remember that your brand needs
+to feel Y... One more thing..." Works directly from their raw free-text
+answer (not pre-extracted structured fields — there's nothing else to
+work from yet at this point in the shorter, two-question onboarding
+flow), and also extracts business_type/business_name for storage on the
+Business row.
 
 reflect_first_result() — sent once, right before a business's very
 first-ever generation (app/engine/orchestrator.py's _run_generation(),
 gated on last_generation_id is None): "I've got a pretty good idea of
 your brand now. There's one thing I think we can improve: ..." Note there
-is no literal "before" content to diff against — this app doesn't retain
-a client's Instagram grid or any external content, only their onboarding
-profile (industry, tone, colors, target audience) and, if their industry
-has been researched, general industry trend context. The "observation" is
-Maya's best specific-sounding read of a plausible gap from what she does
-know, not a scan of real external content — framed that way in the system
-prompt below so it stays plausible rather than inventing false specifics.
+is no literal Instagram content to look at unless the client uploaded an
+actual screenshot (in which case app/engine/color_discovery.py already
+extracted real colors from it, which flow into BusinessContext) — if they
+only sent a handle/link, there is nothing real to observe, and the system
+prompt is explicit that Maya must never claim to have seen a post that
+was never actually fetched.
 
 Both keep the required message structure (line breaks, fixed phrasing)
 explicit in the prompt, varying only the bracketed content, same
@@ -38,46 +41,51 @@ logger = logging.getLogger("socioburp.engine.brand_reflection")
 
 from app.anthropic_client import create_message
 
-UNDERSTANDING_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
+UNDERSTAND_BUSINESS_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 
-A client just finished onboarding (name, industry, logo, colors, brand
-vibe). Write Maya's message reflecting that understanding back to them, in
-EXACTLY this structure — four lines, keep the line breaks, only the
-bracketed parts vary:
+A client just answered "What does your business do?" in their own words.
+From that answer, extract:
+
+- business_type: a natural, specific description of what they do (2-5
+  words, e.g. "handmade gifting business", "family-run bakery", "boutique
+  hair salon") — not a generic category, their actual words distilled.
+- brand_adjectives: 2-4 words describing how the brand should FEEL (not
+  what it sells) — inferred from how they described it. Specific and
+  evocative, not generic filler like "great" or "nice".
+- business_name: their business's actual NAME, ONLY if they clearly stated
+  one in their answer (e.g. "I run Copper & Crumb, a bakery" -> "Copper &
+  Crumb"). null if no name was given — do not invent one.
+
+Then write Maya's message reflecting this back, in EXACTLY this
+structure — five lines, keep the line breaks, only the bracketed parts
+vary:
 
 Got it.
-You run a [business type].
-I'm going to remember that your brand needs to feel [brand adjectives] — not like a mass-produced catalogue.
-
-[business type]: a natural, specific description of what they do, derived
-from their industry and any other signal available (2-5 words, e.g.
-"handmade gifting business", "family-run bakery", "boutique hair salon")
-— not just the raw industry category word.
-
-[brand adjectives]: 2-4 words describing how the brand should FEEL (not
-what it sells), derived from their chosen brand tone, colors, target
-audience, and industry context. Specific and evocative, not generic
-filler like "great" or "nice".
+You run a [business_type].
+I'm going to remember that your brand needs to feel [brand_adjectives] — not like a mass-produced catalogue.
+One more thing...
 
 Do not add any other lines, preamble, or sign-off. Reply with JSON only,
-no other text: {{"message": "..."}}"""
+no other text: {{"business_type": "...", "brand_adjectives": "...", "business_name": "..." or null, "message": "..."}}"""
 
 
-async def reflect_understanding(ctx: BusinessContext) -> str:
+async def understand_business(description: str, language: str = "en") -> dict:
     """
-    Returns the fully composed message text, ready to send as-is.
-    Falls back to a plain Python-templated version (still on-brief, just
-    less specific) if the Claude call fails.
+    Returns {"business_type": str, "brand_adjectives": str,
+    "business_name": str | None, "message": str} — message is the fully
+    composed text, ready to send as-is. Falls back to a plain,
+    still-on-brief version (using their raw answer as business_type) if
+    the Claude call fails, so onboarding can still proceed.
     """
-    user_content = f"Business profile:\n{_summarize_context(ctx)}"
-    if ctx.language and ctx.language != "en" and ctx.language in LANGUAGE_NAMES:
-        user_content += f"\n\nWrite the message in {LANGUAGE_NAMES[ctx.language]}, keeping the same four-line structure."
+    user_content = f"Client's answer: {description}"
+    if language and language != "en" and language in LANGUAGE_NAMES:
+        user_content += f"\n\nWrite the message in {LANGUAGE_NAMES[language]}, keeping the same five-line structure."
 
     try:
         response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
-            max_tokens=200,
-            system=UNDERSTANDING_SYSTEM_PROMPT,
+            max_tokens=250,
+            system=UNDERSTAND_BUSINESS_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
@@ -85,18 +93,32 @@ async def reflect_understanding(ctx: BusinessContext) -> str:
             text = text.strip("`").removeprefix("json").strip()
         parsed = json.loads(text)
         message = parsed.get("message", "").strip()
-        if not message:
-            raise ValueError("Missing or empty 'message' in response")
-        return message
+        if not message or not parsed.get("business_type"):
+            raise ValueError("Missing or empty required fields in response")
+        return {
+            "business_type": parsed["business_type"],
+            "brand_adjectives": parsed.get("brand_adjectives", ""),
+            "business_name": parsed.get("business_name") or None,
+            "message": message,
+        }
     except Exception:
-        logger.exception("reflect_understanding failed for industry=%r", ctx.industry)
-        business_type = ctx.industry or "business"
-        adjectives = ctx.tone or "distinctly yours"
-        return (
-            "Got it.\n"
-            f"You run a {business_type}.\n"
-            f"I'm going to remember that your brand needs to feel {adjectives} — not like a mass-produced catalogue."
-        )
+        logger.exception("understand_business failed for description=%r", description)
+        # Don't prepend "You run a" to their raw answer -- it often already
+        # starts with "I run..."/"We do...", producing "You run a I run a
+        # hair salon" if just concatenated. business_type stored on the
+        # Business row still uses the raw text (still useful data), but the
+        # user-facing fallback message avoids that specific grammatical trap.
+        business_type = description.strip()[:60] or "business"
+        return {
+            "business_type": business_type,
+            "brand_adjectives": "",
+            "business_name": None,
+            "message": (
+                "Got it.\n"
+                "I'm going to remember what makes your brand distinct — not like a mass-produced catalogue.\n"
+                "One more thing..."
+            ),
+        }
 
 
 FIRST_RESULT_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
@@ -105,12 +127,19 @@ A client just finished onboarding and is about to receive their FIRST-EVER
 generated creative. Before it's ready, Maya sends one message noticing a
 specific, plausible gap between how a business like theirs typically
 presents online and the brand identity they just described — something
-worth improving in this first piece. You do NOT have their actual
-Instagram content to look at; ground the observation in their profile
-(industry, tone, colors, target audience) and general industry context
-only — plausible and specific, never claiming to have seen a real post of
-theirs. Write it in EXACTLY this structure — five lines, keep the line
-breaks, only the bracketed part varies:
+worth improving in this first piece.
+
+IMPORTANT: you do NOT have their actual Instagram content to look at,
+UNLESS real extracted brand colors are listed below (those came from an
+actual screenshot they uploaded — genuine signal, safe to reference
+directly, e.g. "your current colors feel more X than Y"). If no colors
+are listed, even if an Instagram handle/link is mentioned, you have NOT
+seen that account — ground the observation in their stated business type,
+tone, and general industry context only, and never claim to have viewed a
+real post of theirs.
+
+Write it in EXACTLY this structure — five lines, keep the line breaks,
+only the bracketed part varies:
 
 I've got a pretty good idea of your brand now.
 There's one thing I think we can improve:
@@ -119,11 +148,8 @@ So I want to try something different.
 Give me a moment.
 
 [specific observation]: ONE concrete, plausible sentence naming a specific
-gap — e.g. generic stock-photo energy vs a stated premium/handmade
-identity, a common industry pattern that undersells their chosen brand
-tone, or a mismatch between their target audience and what typically gets
-posted in their industry. Specific and grounded in the profile details
-given, not a vague platitude like "your posts could be better".
+gap — grounded in the profile details actually given, not a vague
+platitude like "your posts could be better".
 
 Do not add any other lines, preamble, or sign-off. Reply with JSON only,
 no other text: {{"message": "..."}}"""
@@ -157,11 +183,11 @@ async def reflect_first_result(ctx: BusinessContext) -> str:
         return message
     except Exception:
         logger.exception("reflect_first_result failed for industry=%r", ctx.industry)
-        tone = ctx.tone or "distinctive"
+        subject = ctx.industry or "your business"
         return (
             "I've got a pretty good idea of your brand now.\n"
             "There's one thing I think we can improve:\n"
-            f"Your content could lean more into feeling {tone}, rather than generic.\n"
+            f"Content for a {subject} like yours often reads generic — I want to make yours actually feel like you.\n"
             "So I want to try something different.\n"
             "Give me a moment."
         )
@@ -179,4 +205,6 @@ def _summarize_context(ctx: BusinessContext) -> str:
         lines.append(f"Target audience: {ctx.target_audience}")
     if ctx.industry_style:
         lines.append(f"Current industry trends: {ctx.industry_style}")
+    if ctx.instagram_handle:
+        lines.append(f"Instagram page given (not fetched/viewed): {ctx.instagram_handle}")
     return "\n".join(lines)
