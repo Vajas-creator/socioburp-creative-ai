@@ -2,23 +2,26 @@
 Test for the onboarding "skip the guided flow" path (app/onboarding.py,
 state == "new"): if the very first message already describes a real
 creative request instead of just being a greeting, it's remembered
-(Business.pending_first_request) and auto-generated the moment onboarding
-finishes, instead of the client having to repeat themselves. The welcome
+(Business.pending_first_request) and used as the auto-generation brief the
+moment onboarding finishes, instead of the client having to repeat
+themselves or getting a generic fallback intro-post brief. The welcome
 text itself (Aug 2026 copy) is the same either way -- it already covers
-"you can always just message me if there's anything you'd like to discuss
-in specific" -- only whether the request gets stored differs.
+"you can always just message me like you would a person" -- only whether
+the request gets stored, and what brief the final auto-generation uses,
+differs.
 
 Covers:
   - A plain greeting ("hi") gets the standard welcome, no
     pending_first_request stored.
   - A specific first request gets the SAME welcome text, but IS stored on
     pending_first_request -- the question sequence itself is unchanged
-    (still asks name/industry/etc.).
-  - Once onboarding completes (tone selected), a stored pending_first_request
-    is cleared and auto-generation runs with that original text -- the
+    (still asks "what does your business do?" first).
+  - Once onboarding completes (Instagram step answered), a stored
+    pending_first_request is used as the auto-generation brief -- the
     client never has to repeat themselves.
-  - Once onboarding completes with NO pending_first_request, no
-    auto-generation runs (existing behavior unchanged).
+  - Once onboarding completes with NO pending_first_request, the
+    auto-generation still fires (Maya said "Give me a moment" -- that's a
+    promise of action), just with a generic fallback brief instead.
 """
 import sys
 import asyncio
@@ -63,12 +66,8 @@ async def fake_send_text(to, body):
     sent.append(("text", body))
 
 
-async def fake_send_buttons(to, body, buttons):
-    sent.append(("buttons", body))
-
-
 onboarding.send_text = fake_send_text
-onboarding.send_buttons = fake_send_buttons
+onboarding.WELCOME_TO_QUESTION_DELAY_SECONDS = 0  # skip the real 1.5s pacing delay in tests
 
 
 async def fake_detect_language(text):
@@ -95,24 +94,38 @@ onboarding.intent_engine.classify = fake_classify
 from app.engine import brand_reflection  # noqa: E402
 
 
-async def fake_reflect_understanding(ctx):
-    return f"Got it.\nYou run a {ctx.industry}.\nI'm going to remember that your brand needs to feel distinctive."
+async def fake_understand_business(description, language="en"):
+    return {
+        "business_type": "bakery",
+        "brand_adjectives": "warm, handcrafted",
+        "business_name": None,
+        "message": "Got it.\nYou run a bakery.\nI'm going to remember that your brand needs to feel warm, handcrafted — not like a mass-produced catalogue.\nOne more thing...",
+    }
 
 
 # onboarding.py imports brand_reflection lazily (inside the function, at
 # call time) rather than at module level, so there's no onboarding.brand_reflection
 # attribute to patch -- patch the actual module instead, which is the same
 # object the lazy `from app.engine import brand_reflection` resolves to.
-brand_reflection.reflect_understanding = fake_reflect_understanding
+brand_reflection.understand_business = fake_understand_business
 
-generate_calls = []
-
-
-async def fake_generate(business_id, msg):
-    generate_calls.append((business_id, msg.text))
+research_calls = []
 
 
-orchestrator.generate = fake_generate
+async def fake_research(industry):
+    research_calls.append(industry)
+
+
+onboarding.industry_research.research_and_cache_if_needed = fake_research
+
+generation_calls = []
+
+
+async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source=None, reference_image=None):
+    generation_calls.append((business_id, brief, trigger_source))
+
+
+orchestrator._run_generation = fake_run_generation
 
 
 def _make_business(phone):
@@ -124,18 +137,9 @@ def _make_business(phone):
 
 
 async def _complete_rest_of_onboarding(biz_id, phone):
-    """
-    Drives name -> industry -> logo(skip) -> color_screenshot(skip) ->
-    color_manual(skip) -> tone, same as any business. Skipping the
-    screenshot falls through to a manual hex-code question, which itself
-    needs a reply before reaching tone -- two separate skips, not one.
-    """
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="Test Biz"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", button_id="restaurant", text="Restaurant"))
+    """Drives business-description -> Instagram (skipped), the full remaining flow."""
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small bakery"))
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", button_id="friendly", text="Friendly"))
 
 
 async def run():
@@ -151,11 +155,12 @@ async def run():
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         assert biz.pending_first_request is None, f"FAIL: expected no pending request for a greeting, got {biz.pending_first_request!r}"
-        assert biz.onboarding_state == "awaiting_name"
+        assert biz.onboarding_state == "awaiting_business_description"
 
-    welcome_text = sent[-1][1]
+    welcome_text = sent[0][1]
     assert welcome_text.startswith("Hi, I'm Maya."), f"FAIL: expected the standard Maya welcome, got {welcome_text!r}"
-    print(f"PASS: greeting got the standard welcome, nothing stored: {welcome_text!r}\n")
+    assert sent[1][1] == "Let's start simple. What does your business do?", f"FAIL: expected the staged second message, got {sent[1]!r}"
+    print(f"PASS: greeting got the standard welcome + staged question, nothing stored: {[s[1] for s in sent]}\n")
 
     print("=" * 60)
     print("TEST 2: specific first request -> SAME welcome text, but stored on pending_first_request")
@@ -172,16 +177,16 @@ async def run():
         assert biz.pending_first_request == original_request, (
             f"FAIL: expected the original request stored verbatim, got {biz.pending_first_request!r}"
         )
-        assert biz.onboarding_state == "awaiting_name", "FAIL: question sequence should be unchanged (still asks name first)"
+        assert biz.onboarding_state == "awaiting_business_description", "FAIL: question sequence should be unchanged (still asks about the business first)"
 
-    welcome_text = sent[-1][1]
+    welcome_text = sent[0][1]
     assert welcome_text.startswith("Hi, I'm Maya."), f"FAIL: expected the same standard welcome, got {welcome_text!r}"
     print(f"PASS: specific request got the same welcome, but was stored: welcome={welcome_text!r}\n")
 
     print("=" * 60)
-    print("TEST 3: completing onboarding auto-generates the stored request, no repeat needed")
+    print("TEST 3: completing onboarding auto-generates using the stored request, not a generic fallback")
     print("=" * 60)
-    generate_calls.clear()
+    generation_calls.clear()
     await _complete_rest_of_onboarding(biz_id2, phone2)
 
     with get_session() as db:
@@ -189,24 +194,26 @@ async def run():
         assert biz.onboarding_state == "done"
         assert biz.pending_first_request is None, "FAIL: pending_first_request should be cleared once used"
 
-    assert len(generate_calls) == 1, f"FAIL: expected exactly one auto-triggered generation, got {generate_calls}"
-    assert generate_calls[0] == (biz_id2, original_request), (
-        f"FAIL: expected auto-generation with the client's original words, got {generate_calls[0]}"
+    assert len(generation_calls) == 1, f"FAIL: expected exactly one auto-triggered generation, got {generation_calls}"
+    assert generation_calls[0] == (biz_id2, original_request, "onboarding_complete"), (
+        f"FAIL: expected auto-generation with the client's original words, got {generation_calls[0]}"
     )
-    print(f"PASS: onboarding completion auto-generated using the original request: {generate_calls[0]}\n")
+    print(f"PASS: onboarding completion auto-generated using the original request: {generation_calls[0]}\n")
 
     print("=" * 60)
-    print("TEST 4: completing onboarding with NO pending request -> no auto-generation")
+    print("TEST 4: completing onboarding with NO pending request -> still auto-generates, generic fallback brief")
     print("=" * 60)
-    generate_calls.clear()
+    generation_calls.clear()
     await _complete_rest_of_onboarding(biz_id, phone)
 
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         assert biz.onboarding_state == "done"
 
-    assert generate_calls == [], f"FAIL: expected no auto-generation for a greeting-only onboarding, got {generate_calls}"
-    print("PASS: no pending request -> no auto-generation, existing behavior unchanged\n")
+    assert len(generation_calls) == 1, f"FAIL: expected auto-generation to still fire ('Give me a moment' is a promise), got {generation_calls}"
+    assert generation_calls[0][0] == biz_id and generation_calls[0][2] == "onboarding_complete"
+    assert "bakery" in generation_calls[0][1].lower(), f"FAIL: expected the generic fallback to reference the extracted business type, got {generation_calls[0][1]!r}"
+    print(f"PASS: no pending request -> still auto-generated, with a generic fallback brief: {generation_calls[0][1]!r}\n")
 
     print("ALL TESTS PASSED")
 

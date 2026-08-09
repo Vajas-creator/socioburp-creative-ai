@@ -28,7 +28,7 @@ from app.db import get_session
 from app.models import Business
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text
-from app import onboarding, credits, payments, persona, i18n
+from app import onboarding, credits, payments, persona, i18n, analytics
 
 logger = logging.getLogger("socioburp.router")
 
@@ -50,14 +50,16 @@ async def _get_business_lock(business_id: uuid.UUID) -> asyncio.Lock:
         return _business_locks[business_id]
 
 
-def get_or_create_business(db, phone: str) -> Business:
+def get_or_create_business(db, phone: str) -> tuple[Business, bool]:
+    """Returns (business, is_new) -- is_new is what triggers the 'signup' analytics event, see handle_message()."""
     biz = db.query(Business).filter(Business.phone == phone).first()
     if biz is None:
         biz = Business(phone=phone, onboarding_state="new")
         db.add(biz)
         db.flush()  # get biz.id without committing yet
         logger.info("New business created for phone=%s id=%s", phone, biz.id)
-    return biz
+        return biz, True
+    return biz, False
 
 
 async def handle_message(msg: IncomingMessage):
@@ -66,9 +68,16 @@ async def handle_message(msg: IncomingMessage):
     """
     try:
         with get_session() as db:
-            biz = get_or_create_business(db, msg.sender)
+            biz, is_new = get_or_create_business(db, msg.sender)
             db.commit()  # ensure biz.id exists even if something below fails
             biz_id = biz.id
+
+        if is_new:
+            # Logged AFTER the commit above, not before -- analytics.log_event()
+            # opens its own session/connection, and would hit a foreign-key
+            # violation trying to reference a business row that isn't durably
+            # committed yet from another connection's point of view.
+            analytics.log_event(biz_id, "signup")
 
         # Everything from here on touches per-business state (onboarding
         # progress, pending_proposal, last_generation_id, credits) — hold
@@ -98,6 +107,12 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         await onboarding.advance(biz_id, msg)
         return
 
+    # Instrumentation only, no behavior change -- logs 'user_returned_voluntarily'
+    # if it's been a while since this business's last logged event. See
+    # app/analytics.py for the heuristic (there's no real "session" concept
+    # in this app to key off instead).
+    analytics.maybe_log_voluntary_return(biz_id)
+
     # --- Global keywords, available any time post-onboarding ---
     text_lower = (msg.text or "").strip().lower()
 
@@ -107,7 +122,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     # profile yet, per the state check above) and never left to fall
     # through to the generic OTHER-intent fallback in orchestrator.generate().
     if text_lower in BARE_GREETINGS:
-        await send_text(msg.sender, "What do you want to create today? 🎨")
+        await send_text(msg.sender, "Hey! Want today's post? I've got an idea. 💡")
         return
 
     if persona.is_identity_question(msg.text or ""):

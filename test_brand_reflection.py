@@ -4,14 +4,16 @@ Test for app/engine/brand_reflection.py (the two new persona-voiced
 and orchestrator.py.
 
 Covers:
-  - reflect_understanding()/reflect_first_result() parse a well-formed
-    Claude response into the final message text.
+  - understand_business()/reflect_first_result() parse a well-formed
+    Claude response into the final message text (+ extracted fields, for
+    understand_business).
   - Both fail safe to a still-on-brief, Python-templated fallback if the
     Claude call errors -- consistent with every other engine module's
     try/except pattern (prompt_builder, concept_proposal, etc.).
-  - Wiring: onboarding.py sends the reflect_understanding() message right
-    when onboarding completes (state -> done), before the existing
-    credits/help message.
+  - Wiring: onboarding.py sends the understand_business() message right
+    after the client answers "what does your business do?" (Aug 2026
+    2-question redesign) -- and stores business_type/business_name on
+    the Business row.
   - Wiring: orchestrator.py sends the reflect_first_result() message
     ONLY for a business's very first-ever generation (last_generation_id
     is None) -- NOT for a second/later generation, which still gets the
@@ -64,31 +66,38 @@ def _ctx(**overrides):
 
 async def part1_direct_unit_tests():
     print("=" * 60)
-    print("TEST 1: reflect_understanding() parses a well-formed response")
+    print("TEST 1: understand_business() parses a well-formed response, incl. extracted fields")
     print("=" * 60)
 
     async def fake_create_message(**kwargs):
-        return _FakeResponse('{"message": "Got it.\\nYou run a handmade gifting business.\\nI\'m going to remember that your brand needs to feel warm, personal — not like a mass-produced catalogue."}')
+        return _FakeResponse(
+            '{"business_type": "handmade gifting business", "brand_adjectives": "warm, personal", '
+            '"business_name": "Copper & Crumb", '
+            '"message": "Got it.\\nYou run a handmade gifting business.\\nI\'m going to remember that your brand needs to feel warm, personal — not like a mass-produced catalogue.\\nOne more thing..."}'
+        )
 
     brand_reflection.create_message = fake_create_message
-    result = await brand_reflection.reflect_understanding(_ctx())
-    assert result.startswith("Got it.\n"), f"FAIL: expected the message verbatim, got {result!r}"
-    assert "handmade gifting business" in result
-    print(f"PASS: {result!r}\n")
+    result = await brand_reflection.understand_business("I run Copper & Crumb, a handmade gifting business")
+    assert result["message"].startswith("Got it.\n"), f"FAIL: expected the message verbatim, got {result['message']!r}"
+    assert result["message"].endswith("One more thing..."), f"FAIL: got {result['message']!r}"
+    assert result["business_type"] == "handmade gifting business", f"FAIL: got {result}"
+    assert result["business_name"] == "Copper & Crumb", f"FAIL: expected the extracted name, got {result}"
+    print(f"PASS: {result}\n")
 
     print("=" * 60)
-    print("TEST 2: reflect_understanding() falls back safely on a Claude failure")
+    print("TEST 2: understand_business() falls back safely on a Claude failure")
     print("=" * 60)
 
     async def fake_create_message_fails(**kwargs):
         raise RuntimeError("simulated API failure")
 
     brand_reflection.create_message = fake_create_message_fails
-    result = await brand_reflection.reflect_understanding(_ctx(industry="salon", tone="bold"))
-    assert result.startswith("Got it.\n"), f"FAIL: expected the fallback to still open with 'Got it.', got {result!r}"
-    assert "salon" in result, f"FAIL: expected the fallback to use the real industry, got {result!r}"
-    assert "mass-produced catalogue" in result, f"FAIL: expected the fixed closing phrase, got {result!r}"
-    print(f"PASS (fallback): {result!r}\n")
+    result = await brand_reflection.understand_business("I run a hair salon in Bandra")
+    assert result["message"].startswith("Got it.\n"), f"FAIL: expected the fallback to still open with 'Got it.', got {result['message']!r}"
+    assert result["message"].endswith("One more thing..."), f"FAIL: got {result['message']!r}"
+    assert "mass-produced catalogue" in result["message"], f"FAIL: expected the fixed closing phrase, got {result['message']!r}"
+    assert result["business_name"] is None, f"FAIL: fallback should never invent a name, got {result}"
+    print(f"PASS (fallback): {result}\n")
 
     print("=" * 60)
     print("TEST 3: reflect_first_result() parses a well-formed response")
@@ -112,16 +121,16 @@ async def part1_direct_unit_tests():
     print("TEST 4: reflect_first_result() falls back safely on a Claude failure")
     print("=" * 60)
     brand_reflection.create_message = fake_create_message_fails
-    result = await brand_reflection.reflect_first_result(_ctx(tone="friendly"))
+    result = await brand_reflection.reflect_first_result(_ctx(industry="salon"))
     assert result.startswith("I've got a pretty good idea of your brand now.\n"), f"FAIL: got {result!r}"
     assert result.endswith("Give me a moment."), f"FAIL: got {result!r}"
-    assert "friendly" in result, f"FAIL: expected the fallback to reference the real tone, got {result!r}"
+    assert "salon" in result, f"FAIL: expected the fallback to reference the real industry, got {result!r}"
     print(f"PASS (fallback): {result!r}\n")
 
 
 async def part2_onboarding_wiring():
     print("=" * 60)
-    print("TEST 5: onboarding.py sends reflect_understanding() right when onboarding completes")
+    print("TEST 5: onboarding.py sends understand_business()'s message right after the business-description answer")
     print("=" * 60)
     from app import onboarding
     from app.db import get_session
@@ -133,11 +142,8 @@ async def part2_onboarding_wiring():
     async def fake_send_text(to, body):
         sent.append(body)
 
-    async def fake_send_buttons(to, body, buttons):
-        sent.append(body)
-
     onboarding.send_text = fake_send_text
-    onboarding.send_buttons = fake_send_buttons
+    onboarding.WELCOME_TO_QUESTION_DELAY_SECONDS = 0  # skip the real 1.5s pacing delay in tests
 
     async def fake_detect_language(text):
         return "en"
@@ -153,13 +159,32 @@ async def part2_onboarding_wiring():
 
     onboarding.intent_engine.classify = fake_classify
 
-    reflect_calls = []
+    understand_calls = []
 
-    async def fake_reflect_understanding(ctx):
-        reflect_calls.append(ctx.industry)
-        return "Got it.\nYou run a restaurant.\nI'm going to remember that your brand needs to feel warm and inviting — not like a mass-produced catalogue."
+    async def fake_understand_business(description, language="en"):
+        understand_calls.append(description)
+        return {
+            "business_type": "restaurant",
+            "brand_adjectives": "warm, inviting",
+            "business_name": "Test Restaurant",
+            "message": "Got it.\nYou run a restaurant.\nI'm going to remember that your brand needs to feel warm and inviting — not like a mass-produced catalogue.\nOne more thing...",
+        }
 
-    brand_reflection.reflect_understanding = fake_reflect_understanding
+    brand_reflection.understand_business = fake_understand_business
+
+    async def fake_research(industry):
+        pass
+
+    onboarding.industry_research.research_and_cache_if_needed = fake_research
+
+    generation_calls = []
+
+    async def fake_run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source=None, reference_image=None):
+        generation_calls.append(trigger_source)
+
+    import app.engine.orchestrator as orch
+    real_run_generation = orch._run_generation  # restored below -- part3 needs the real one
+    orch._run_generation = fake_run_generation
 
     phone = "919999999970"
     with get_session() as db:
@@ -169,19 +194,31 @@ async def part2_onboarding_wiring():
         biz_id = biz.id
 
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="hi"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="Test Restaurant"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", button_id="restaurant", text="Restaurant"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     sent.clear()
-    reflect_calls.clear()
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", button_id="friendly", text="Friendly"))
+    understand_calls.clear()
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small restaurant called Test Restaurant"))
 
-    assert reflect_calls == ["restaurant"], f"FAIL: expected reflect_understanding() called once with the real industry, got {reflect_calls}"
-    assert len(sent) >= 2, f"FAIL: expected the reflection message + the credits/help message, got {sent}"
+    assert understand_calls == ["I run a small restaurant called Test Restaurant"], f"FAIL: expected understand_business() called with the raw answer, got {understand_calls}"
+    assert len(sent) >= 2, f"FAIL: expected the reflection message + the Instagram ask, got {sent}"
     assert sent[0].startswith("Got it.\n"), f"FAIL: expected the reflection message sent first, got {sent[0]!r}"
-    print(f"PASS: reflection sent first ({sent[0]!r}), then the existing done message ({sent[1][:40]!r}...)\n")
+    assert "Instagram" in sent[1], f"FAIL: expected the Instagram question sent next, got {sent[1]!r}"
+    with get_session() as db:
+        biz_row = db.query(Business).filter(Business.id == biz_id).first()
+        assert biz_row.industry == "restaurant", f"FAIL: expected the extracted business_type stored, got {biz_row.industry!r}"
+        assert biz_row.name == "Test Restaurant", f"FAIL: expected the extracted business_name stored, got {biz_row.name!r}"
+    print(f"PASS: reflection sent first ({sent[0]!r}), Instagram question next ({sent[1]!r}), fields stored\n")
+
+    print("=" * 60)
+    print("TEST 5b: completing the Instagram step auto-generates (bypassing generate()'s proposal gate)")
+    print("=" * 60)
+    generation_calls.clear()
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    with get_session() as db:
+        assert db.query(Business).filter(Business.id == biz_id).first().onboarding_state == "done"
+    assert generation_calls == ["onboarding_complete"], f"FAIL: expected _run_generation() called directly with trigger_source='onboarding_complete', got {generation_calls}"
+    print("PASS: onboarding completion called _run_generation() directly, skipping the proposal gate\n")
+
+    orch._run_generation = real_run_generation  # part3 needs the real function
 
 
 async def part3_orchestrator_wiring():

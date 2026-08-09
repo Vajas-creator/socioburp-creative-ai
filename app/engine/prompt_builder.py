@@ -30,6 +30,13 @@ Rules:
 - 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
   a square. Compose for a taller-than-wide canvas: don't center everything
   as if for a 1:1 crop, leave room above and below the focal subject.
+- SAFE ZONE: the rendered image gets center-cropped afterward, trimming
+  roughly the outer 10% off the TOP and BOTTOM edges before final delivery.
+  Explicitly instruct the image model to keep ALL text (headline, subline,
+  any on-image offer text) and every important visual element well within
+  the vertical center — nothing text-bearing may extend into the top or
+  bottom ~12% margin of the canvas, or it will be cut off. The full width
+  is safe and not cropped.
 - Specify: layout, headline text (short, punchy, in quotes), color scheme using
   the brand's exact hex colors if provided, visual style matching the brand
   tone, clear empty space in the bottom-right corner for logo placement

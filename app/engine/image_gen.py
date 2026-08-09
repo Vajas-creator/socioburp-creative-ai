@@ -68,11 +68,16 @@ def _fit_to_target_size(image_bytes: bytes) -> bytes:
     Why not just request the target size from the API directly: gpt-image-2
     (like gpt-image-1) only accepts a fixed enum of sizes -- "1024x1024",
     "1024x1536", "1536x1024", "auto" -- there's no way to request 1229x1536
-    directly, and neither portrait nor landscape option is close enough to
-    ~4:5 to crop losslessly (both are 2:3). Square has enough resolution in
-    both dimensions to center-crop to the exact target aspect first, then
-    scale up uniformly -- unlike a non-uniform resize, this never distorts
-    the image, only reframes and upscales it.
+    directly. _generate_openai/_edit_openai request "1024x1536" (native
+    portrait, ratio 0.667) rather than square specifically so this crop
+    only has to remove ~8% off the TOP and BOTTOM to reach the ~0.8 target
+    ratio, leaving the full width untouched -- headline text lives on the
+    horizontal axis, so a square source (which this used to request) needed
+    a ~20%-of-width crop instead and was clipping headline text that
+    extended into that discarded margin (see Aug 2026 incident: "Treat
+    Yourselves" rendering as "reat Yourselves"). This function still
+    handles a width-crop branch too, defensively, in case the source isn't
+    what's expected.
     """
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -125,7 +130,7 @@ async def _generate_openai(prompt: str, count: int) -> list[bytes]:
         payload = {
             "model": "gpt-image-2",
             "prompt": prompt,
-            "size": "1024x1024",
+            "size": "1024x1536",
             "n": 1,
         }
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -161,7 +166,7 @@ async def _edit_openai(prompt: str, count: int, reference_image: bytes) -> list[
 
     async def _one_call():
         files = {"image": ("reference.png", reference_image, "image/png")}
-        data = {"model": "gpt-image-2", "prompt": prompt, "size": "1024x1024", "n": "1"}
+        data = {"model": "gpt-image-2", "prompt": prompt, "size": "1024x1536", "n": "1"}
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, files=files, data=data)
             if resp.status_code >= 400:
