@@ -52,7 +52,7 @@ from app.db import get_session
 from app.models import Business, BrandProfile, Generation, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_image, send_image_with_button, download_media
-from app.storage import upload_creative, upload_base_image
+from app.storage import upload_creative, upload_base_image, upload_carousel_slide
 from app.credits import charge_for_generation, get_balance, regen_within_budget, record_regen_used
 from app.config import settings
 from app.engine.context import BusinessContext
@@ -71,6 +71,8 @@ from app.engine import brand_reflection
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
 REGEN_THRESHOLD = 60
+CAROUSEL_SLIDE_COUNT = 3
+CAROUSEL_CREDIT_COST = 3  # 1 credit per slide, same rate as a single creative
 
 
 def _check_rate_limit(db, business_id: uuid.UUID) -> bool:
@@ -160,6 +162,9 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             style_summary=(profile.extras or {}).get("style_summary") if profile else None,
             language=business.preferred_language or "en",
             industry_style=industry_research.get_cached_style(business.industry),
+            instagram_handle=business.instagram_handle,
+            instagram_bio=profile.instagram_bio if profile else None,
+            instagram_recent_captions=profile.instagram_recent_captions if profile else None,
         )
 
         within_limit = _check_rate_limit(db, business_id)
@@ -295,6 +300,164 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     if last_generation_id:
         await learning.record_accepted_direction(business_id, last_generation_id)
     await _run_generation(business_id, phone, ctx, msg.text, msg.text, last_generation_id, is_revision=False, trigger_source="specific_enough", reference_image=reference_image)
+
+
+async def generate_carousel(business_id: uuid.UUID, msg: IncomingMessage):
+    """
+    A carousel post: CAROUSEL_SLIDE_COUNT related images posted together as
+    one native Instagram carousel (see app/instagram.py's
+    content_type="carousel" branch -- the Make.com scenario already
+    supported this before this function existed; nothing on the app side
+    ever produced a carousel-shaped request for it. See the Aug 2026
+    "carousel not generating" investigation).
+
+    Deliberately a separate, simpler pipeline from _run_generation():
+    keyword-triggered ("carousel" in the message, see app/router.py) and
+    generates immediately -- no concept-proposal negotiation, no revision
+    handling, no quality-gated regen budget. Charges CAROUSEL_CREDIT_COST
+    up front as one Generation row; router.py checks the balance before
+    calling this.
+
+    Deliberately does NOT update ConversationState.last_generation_id --
+    the single-image revision pipeline (parent.built_prompt,
+    parent.base_image_url) isn't shaped for a multi-slide parent, so a
+    follow-up "make it more premium" should keep targeting the last
+    single-image generation, not this carousel.
+    """
+    if not msg.text:
+        await send_text(msg.sender, "Please describe what you'd like the carousel to be about 🙂")
+        return
+
+    phone = msg.sender
+
+    with get_session() as db:
+        business = db.query(Business).filter(Business.id == business_id).first()
+        profile = db.query(BrandProfile).filter(BrandProfile.business_id == business_id).first()
+
+        ctx = BusinessContext(
+            name=business.name,
+            industry=business.industry,
+            tone=profile.tone if profile else None,
+            primary_color=profile.primary_color if profile else None,
+            secondary_color=profile.secondary_color if profile else None,
+            target_audience=profile.target_audience if profile else None,
+            website=profile.website if profile else None,
+            contact_phone=profile.contact_phone if profile else None,
+            logo_url=profile.logo_url if profile else None,
+            learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
+            style_summary=(profile.extras or {}).get("style_summary") if profile else None,
+            language=business.preferred_language or "en",
+            industry_style=industry_research.get_cached_style(business.industry),
+            instagram_handle=business.instagram_handle,
+            instagram_bio=profile.instagram_bio if profile else None,
+            instagram_recent_captions=profile.instagram_recent_captions if profile else None,
+        )
+
+        within_limit = _check_rate_limit(db, business_id)
+
+    if not within_limit:
+        await send_text(
+            phone,
+            f"You've hit the limit of {settings.MAX_GENERATIONS_PER_HOUR} creatives per hour 🙏 "
+            "Please try again in a bit — this just protects against accidental spam.",
+        )
+        return
+
+    await send_text(phone, f"🎠 Creating your {CAROUSEL_SLIDE_COUNT}-slide carousel... (~a minute)")
+
+    try:
+        slide_images = []
+        for slide_num in range(1, CAROUSEL_SLIDE_COUNT + 1):
+            built = await prompt_builder.build(
+                ctx,
+                f"Slide {slide_num} of {CAROUSEL_SLIDE_COUNT} in an Instagram carousel post. "
+                f"Overall carousel theme/request: {msg.text}. Keep a consistent visual style and "
+                f"color palette across all {CAROUSEL_SLIDE_COUNT} slides, but vary the composition "
+                f"and focus for this specific slide so the carousel doesn't feel repetitive.",
+            )
+            candidates = await image_gen.generate_images(built["image_prompt"], count=1)
+            if not candidates:
+                raise RuntimeError(f"No image returned for carousel slide {slide_num}")
+
+            slide_image = candidates[0]
+            if ctx.has_logo:
+                async with httpx.AsyncClient(timeout=15.0) as http_client:
+                    logo_resp = await http_client.get(ctx.logo_url)
+                    if logo_resp.status_code == 200:
+                        slide_image = compositor.composite_logo(slide_image, logo_resp.content)
+
+            slide_images.append(slide_image)
+
+        cap = await caption_engine.generate(ctx, msg.text)
+
+        with get_session() as db:
+            gen_row = Generation(
+                business_id=business_id,
+                user_message=msg.text,
+                built_prompt=f"[carousel, {CAROUSEL_SLIDE_COUNT} slides] {msg.text}",
+                status="generating",
+                credits_charged=CAROUSEL_CREDIT_COST,
+                trigger_source="carousel",
+            )
+            db.add(gen_row)
+            db.flush()
+            generation_id = gen_row.id
+
+        # Offloaded to threads -- same reasoning as the single-image path,
+        # see upload_creative's call sites above.
+        image_urls = [
+            await asyncio.to_thread(upload_carousel_slide, business_id, generation_id, i + 1, img)
+            for i, img in enumerate(slide_images)
+        ]
+
+        full_caption = f"{cap['caption']}\n\n{cap['hashtags']}"
+
+        with get_session() as db:
+            gen_row = db.query(Generation).filter(Generation.id == generation_id).first()
+            gen_row.image_url = image_urls[0]  # first slide doubles as the WhatsApp preview thumbnail
+            gen_row.carousel_image_urls = image_urls
+            gen_row.caption = cap["caption"]
+            gen_row.hashtags = cap["hashtags"]
+            gen_row.status = "done"
+
+        charge_for_generation(business_id, generation_id, amount=CAROUSEL_CREDIT_COST)
+
+        balance = get_balance(business_id)
+        low_balance_note = (
+            f"\n\n⚠️ Only {balance} credits left. Reply *topup* to recharge."
+            if balance <= settings.LOW_BALANCE_THRESHOLD else ""
+        )
+
+        # All but the last slide as plain images; the last one carries the
+        # "Post to Instagram" button + caption, same delivery shape as a
+        # single creative (see _deliver_creative).
+        for url in image_urls[:-1]:
+            await send_image(phone, url)
+
+        with get_session() as db:
+            biz_row = db.query(Business).filter(Business.id == business_id).first()
+            instagram_account_id = biz_row.instagram_account_id if biz_row else None
+
+        if instagram_account_id:
+            await send_image_with_button(
+                phone, image_urls[-1], body=full_caption[:1024],
+                button_id=f"post_ig_{generation_id}", button_label="Post to Instagram",
+            )
+        else:
+            await send_image(phone, image_urls[-1], caption=full_caption[:1024])
+
+        await send_text(
+            phone,
+            f"✨ Here's your {CAROUSEL_SLIDE_COUNT}-slide carousel!\n\n"
+            f"💳 Credits left: {balance}{low_balance_note}",
+        )
+
+    except Exception:
+        logger.exception("Carousel generation failed for business=%s", business_id)
+        await send_text(
+            phone,
+            "Something went wrong creating your carousel 🙏 No credits were charged. Please try again.",
+        )
 
 
 async def _recomposite_logo(business_id, phone, ctx, position, user_message, parent_id):

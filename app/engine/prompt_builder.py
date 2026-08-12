@@ -74,6 +74,10 @@ Rules:
 - If "Current industry trends" is listed, let it inform general direction for
   clients without much history yet — it's industry-wide signal, weight it
   below anything client-specific (learned preferences/style pattern above).
+- If the client's actual Instagram bio and/or recent post captions are listed,
+  let them inform tone, voice, and visual direction — this is real evidence
+  of how the client already presents their brand, not a guess. Don't quote
+  or repeat their captions verbatim on the image.
 
 Reply with JSON only, no other text:
 {"image_prompt": "...", "headline_text": "...", "notes_for_caption": "..."}"""
@@ -146,4 +150,11 @@ def _summarize_context(ctx: BusinessContext) -> str:
             lines.append(f"  - {pref}")
     if ctx.industry_style:
         lines.append(f"Current industry trends: {ctx.industry_style}")
+    if ctx.instagram_bio:
+        lines.append(f"Client's actual Instagram bio: {ctx.instagram_bio}")
+    if ctx.instagram_recent_captions:
+        lines.append("Client's actual recent Instagram post captions (for tone/topic reference, don't repeat verbatim):")
+        for caption in ctx.instagram_recent_captions.split("\n"):
+            if caption.strip():
+                lines.append(f"  - {caption.strip()}")
     return "\n".join(lines)

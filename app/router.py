@@ -189,6 +189,21 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         await send_recent_generations(biz_id, msg.sender)
         return
 
+    # --- Carousel request: separate, fixed-size (3-slide) pipeline ---
+    # Keyword-triggered by design (see app/engine/orchestrator.py's
+    # generate_carousel() docstring) -- never routed through the normal
+    # concept-proposal/revision logic below.
+    if "carousel" in text_lower:
+        from app.engine.orchestrator import generate_carousel, CAROUSEL_CREDIT_COST
+        if credits.get_balance(biz_id) < CAROUSEL_CREDIT_COST:
+            await payments.send_topup_options(
+                biz_id, msg.sender,
+                prefix=f"A carousel post uses {CAROUSEL_CREDIT_COST} credits and you don't have enough right now 🙏 "
+            )
+            return
+        await generate_carousel(biz_id, msg)
+        return
+
     # --- Credit check before anything that costs money ---
     if credits.get_balance(biz_id) < 1:
         await payments.send_topup_options(

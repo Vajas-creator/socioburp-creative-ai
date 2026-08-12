@@ -195,6 +195,19 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                     logger.exception("Instagram screenshot processing failed for business=%s", business_id)
             elif text_lower not in INSTAGRAM_SKIP_WORDS and msg.text and msg.text.strip():
                 biz.instagram_handle = msg.text.strip()
+                # Fire-and-forget, same pattern as industry_research below --
+                # fetches the actual bio + recent captions in the background
+                # via Make's Business Discovery scenario and writes them onto
+                # BrandProfile once done. Never awaited here: this must not
+                # add latency to the "give me a moment" -> first generation
+                # path below. The first-ever generation won't have this yet
+                # (same as industry research on a cache miss) -- it's there
+                # for every generation after that. See
+                # app/engine/instagram_analysis.py.
+                from app.engine import instagram_analysis
+                asyncio.create_task(
+                    instagram_analysis.fetch_and_store_profile_summary(business_id, biz.instagram_handle)
+                )
             # A skip/decline or empty reply: proceed anyway -- unlike the
             # business-description question, this one never blocks
             # onboarding completion.
@@ -227,6 +240,8 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                 language=language,
                 industry_style=industry_research.get_cached_style(biz.industry),
                 instagram_handle=biz.instagram_handle,
+                instagram_bio=profile.instagram_bio,
+                instagram_recent_captions=profile.instagram_recent_captions,
             )
 
             # Commit now, not just at the end of this `with` block -- the

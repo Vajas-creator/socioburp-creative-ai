@@ -89,7 +89,7 @@ class _FakeResponse:
         self.text = text
 
 
-def _make_business_and_generation(phone, instagram_account_id="ig-acct-123", posted=False):
+def _make_business_and_generation(phone, instagram_account_id="ig-acct-123", posted=False, carousel_image_urls=None):
     with get_session() as db:
         biz = Business(phone=phone, name="Test Biz", onboarding_state="done", instagram_account_id=instagram_account_id)
         db.add(biz)
@@ -99,6 +99,7 @@ def _make_business_and_generation(phone, instagram_account_id="ig-acct-123", pos
             business_id=biz_id, user_message="make a post", status="done",
             image_url="https://fake.example.com/img.png", caption="Great offer!",
             hashtags="#offer", posted_to_instagram=posted,
+            carousel_image_urls=carousel_image_urls,
         )
         db.add(gen)
         db.flush()
@@ -184,6 +185,37 @@ async def run():
         gen = db.query(Generation).filter(Generation.id == gen_id4).first()
         assert gen.posted_to_instagram is False, "FAIL: must not mark posted_to_instagram on a failed webhook call"
     print(f"PASS: failure handled correctly: {sent[0]!r}, logged: {error_logs}\n")
+
+    print("=" * 60)
+    print("TEST 5: a carousel generation (carousel_image_urls set) posts through the 'carousel' branch, not 'photo'")
+    print("=" * 60)
+    sent.clear()
+    log_records.clear()
+    slide_urls = [
+        "https://fake.example.com/creatives/gen5_slide1.png",
+        "https://fake.example.com/creatives/gen5_slide2.png",
+        "https://fake.example.com/creatives/gen5_slide3.png",
+    ]
+    biz_id5, gen_id5 = _make_business_and_generation("919999999944", carousel_image_urls=slide_urls)
+
+    captured_payloads = []
+
+    async def fake_post_capture(self, url, json=None, **kwargs):
+        captured_payloads.append(json)
+        return _FakeResponse(200, '{"status":"accepted"}')
+
+    httpx.AsyncClient.post = fake_post_capture
+    await instagram.handle_post_request(biz_id5, "919999999944", gen_id5)
+    httpx.AsyncClient.post = real_post
+
+    assert len(captured_payloads) == 1, f"FAIL: expected exactly one webhook call, got {captured_payloads}"
+    payload = captured_payloads[0]
+    assert payload["content_type"] == "carousel", f"FAIL: expected content_type='carousel', got {payload}"
+    assert "image_url" not in payload, f"FAIL: a carousel payload should not carry a top-level image_url, got {payload}"
+    assert payload["files"] == [
+        {"media_type": "IMAGE", "image_url": u} for u in slide_urls
+    ], f"FAIL: expected files as [{{'media_type': 'IMAGE', 'image_url': ...}}, ...] matching the Make scenario's CreateCarouselPhoto module, got {payload['files']}"
+    print(f"PASS: carousel generation posted with content_type='carousel' and a correctly-shaped files array: {payload['files']}\n")
 
     print("ALL TESTS PASSED")
 
