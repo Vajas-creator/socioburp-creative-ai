@@ -137,9 +137,22 @@ def _make_business(phone):
 
 
 async def _complete_rest_of_onboarding(biz_id, phone):
-    """Drives business-description -> Instagram (skipped), the full remaining flow."""
+    """
+    Drives business-description -> Instagram (skipped), the full remaining
+    flow. advance() itself no longer calls _run_generation() when
+    onboarding completes -- it returns (ctx, brief) instead, and the
+    caller (app/router.py in production) is responsible for invoking
+    _run_generation(). Simulate that hand-off here, same as production.
+    """
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small bakery"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    if result is not None:
+        ctx, brief = result
+        await orchestrator._run_generation(
+            biz_id, phone, ctx, brief, brief,
+            last_generation_id=None, is_revision=False,
+            trigger_source="onboarding_complete",
+        )
 
 
 async def run():

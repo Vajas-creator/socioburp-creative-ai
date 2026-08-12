@@ -41,6 +41,7 @@ below that point (prompt_builder, caption, etc.) takes that plain context —
 never a live ORM object — because the session closes before those (slow,
 async, external-API-calling) functions run. See app/engine/context.py.
 """
+import asyncio
 import json
 import logging
 import uuid
@@ -348,7 +349,12 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
             db.flush()
             generation_id = gen_row.id
 
-        image_url = upload_creative(business_id, generation_id, composited)
+        # Offloaded to a thread -- upload_creative() is a synchronous,
+        # blocking boto3 call; called directly it would block the entire
+        # asyncio event loop (every user's request, not just this one) for
+        # as long as R2 takes to respond. See the Aug 2026 "bot goes
+        # silent" incident.
+        image_url = await asyncio.to_thread(upload_creative, business_id, generation_id, composited)
 
         with get_session() as db:
             gen_row = db.query(Generation).filter(Generation.id == generation_id).first()
@@ -395,22 +401,28 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
     alone. None for text-only requests, or when the caller couldn't
     download it (see generate()).
     """
-    if last_generation_id is None:
-        # This business's very first-ever generation -- a one-time,
-        # persona-voiced "here's what I've noticed" moment instead of the
-        # plain "Creating your design..." status line every generation
-        # after this one gets. See app/engine/brand_reflection.py.
-        first_result_msg = await brand_reflection.reflect_first_result(ctx)
-        await send_text(phone, first_result_msg)
-    else:
-        await send_text(phone, "🎨 Creating your design... (~30 seconds)")
-
     try:
+        if last_generation_id is None:
+            # This business's very first-ever generation -- a one-time,
+            # persona-voiced "here's what I've noticed" moment instead of the
+            # plain "Creating your design..." status line every generation
+            # after this one gets. See app/engine/brand_reflection.py.
+            # Moved inside the try (was previously a bare call before it) --
+            # a failure here (e.g. a WhatsApp send hiccup) must land in the
+            # same error handling as the rest of the pipeline, not escape
+            # uncaught. See the Aug 2026 "bot goes silent after 'give me a
+            # moment'" incident.
+            first_result_msg = await brand_reflection.reflect_first_result(ctx)
+            await send_text(phone, first_result_msg)
+        else:
+            await send_text(phone, "🎨 Creating your design... (~30 seconds)")
+
         # --- Build the image prompt ---
         if is_revision:
             with get_session() as db:
                 parent = db.query(Generation).filter(Generation.id == last_generation_id).first()
                 base_prompt = parent.built_prompt if parent else None
+                parent_image_url = (parent.base_image_url or parent.image_url) if parent else None
 
             if base_prompt:
                 built = await prompt_builder.build(
@@ -418,6 +430,36 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                 )
             else:
                 built = await prompt_builder.build(ctx, brief)
+
+            # Fetch the parent's actual image to use as an edit reference,
+            # if this message didn't already attach one (e.g. the client
+            # re-attached a fresh photo instead of asking to revise the
+            # prior result -- that reference_image, if present, takes
+            # priority). This is what makes "change background to black"
+            # actually edit the specific image the client is looking at,
+            # instead of silently regenerating an unrelated new one from a
+            # re-described text prompt -- see the Aug 2026 "bot doesn't
+            # know which image I mean" incident. base_image_url (the
+            # pre-logo-composite background) is preferred over image_url
+            # (the final, logo-composited creative) so the downstream
+            # logo-compositing step below still applies cleanly to the
+            # edited result.
+            if reference_image is None and parent_image_url:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as http_client:
+                        parent_resp = await http_client.get(parent_image_url)
+                    if parent_resp.status_code == 200:
+                        reference_image = parent_resp.content
+                    else:
+                        logger.warning(
+                            "Fetching parent image for revision reference returned %s — falling back to text-only revision, generation=%s",
+                            parent_resp.status_code, last_generation_id,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Failed to fetch parent image for revision reference — falling back to text-only revision, generation=%s",
+                        last_generation_id,
+                    )
         else:
             built = await prompt_builder.build(ctx, brief)
 
@@ -508,7 +550,9 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             db.flush()
             generation_id = gen_row.id
 
-        image_url = upload_creative(business_id, generation_id, best_image)
+        # Offloaded to a thread -- see the note on the same pattern in
+        # _recomposite_logo() above.
+        image_url = await asyncio.to_thread(upload_creative, business_id, generation_id, best_image)
         full_caption = f"{cap['caption']}\n\n{cap['hashtags']}"
 
         # Also upload the pre-composite background — this is what a future
@@ -517,7 +561,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         # regeneration.
         base_image_url = None
         try:
-            base_image_url = upload_base_image(business_id, generation_id, base_image)
+            base_image_url = await asyncio.to_thread(upload_base_image, business_id, generation_id, base_image)
         except Exception:
             logger.exception("Base image upload failed for generation=%s — logo moves will regenerate", generation_id)
 

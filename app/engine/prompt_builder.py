@@ -30,13 +30,19 @@ Rules:
 - 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
   a square. Compose for a taller-than-wide canvas: don't center everything
   as if for a 1:1 crop, leave room above and below the focal subject.
-- SAFE ZONE: the rendered image gets center-cropped afterward, trimming
-  roughly the outer 10% off the TOP and BOTTOM edges before final delivery.
-  Explicitly instruct the image model to keep ALL text (headline, subline,
-  any on-image offer text) and every important visual element well within
-  the vertical center — nothing text-bearing may extend into the top or
-  bottom ~12% margin of the canvas, or it will be cut off. The full width
-  is safe and not cropped.
+- SAFE ZONE (critical — a prior version of this rule was too permissive and
+  headline text still got clipped in testing): the rendered image gets
+  center-cropped afterward, trimming roughly the outer 8% off the TOP and
+  BOTTOM edges before final delivery. Explicitly and forcefully instruct
+  the image model that ALL text (headline, subline, any on-image offer
+  text) and every important visual element must stay within the CENTER
+  60% of the canvas height — i.e. leave the top 20% and bottom 20%
+  completely clear of text, as generous headroom above the actual crop
+  line, not just barely inside it. Treat this like a title-safe broadcast
+  margin: text creeping toward the edge is exactly what gets cut off.
+  State this constraint explicitly in the image_prompt text itself (don't
+  just imply it), since this instruction is advisory to the image model,
+  not a hard guarantee. The full width is safe and not cropped.
 - Specify: layout, headline text (short, punchy, in quotes), color scheme using
   the brand's exact hex colors if provided, visual style matching the brand
   tone, clear empty space in the bottom-right corner for logo placement

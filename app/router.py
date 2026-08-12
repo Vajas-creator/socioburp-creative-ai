@@ -104,7 +104,21 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
 
     # --- Onboarding takes priority over everything else ---
     if onboarding_state != "done":
-        await onboarding.advance(biz_id, msg)
+        result = await onboarding.advance(biz_id, msg)
+        if result is not None:
+            # Onboarding just completed -- run the auto-generation it
+            # promised ("Give me a moment") here, now that advance()'s own
+            # DB session has fully closed. Must NOT run this while that
+            # session is still open -- see onboarding.advance()'s
+            # docstring for why. last_generation_id=None is correct: this
+            # is genuinely this business's first-ever generation.
+            ctx, brief = result
+            from app.engine.orchestrator import _run_generation
+            await _run_generation(
+                biz_id, msg.sender, ctx, brief, brief,
+                last_generation_id=None, is_revision=False,
+                trigger_source="onboarding_complete",
+            )
         return
 
     # Instrumentation only, no behavior change -- logs 'user_returned_voluntarily'
@@ -121,7 +135,12 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     # back into onboarding (that only ever happens for a business with no
     # profile yet, per the state check above) and never left to fall
     # through to the generic OTHER-intent fallback in orchestrator.generate().
-    if text_lower in BARE_GREETINGS:
+    # Trailing punctuation ("Hello!", "hey.", "hi??") is stripped just for
+    # this check -- text_lower itself is left untouched below, since the
+    # other exact-match keywords (credits/topup/etc.) aren't meant to
+    # tolerate that.
+    greeting_candidate = text_lower.rstrip("!.,?~ ")
+    if greeting_candidate in BARE_GREETINGS:
         await send_text(msg.sender, "Hey! Want today's post? I've got an idea. 💡")
         return
 

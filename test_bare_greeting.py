@@ -11,7 +11,8 @@ new business) re-running onboarding.
 
 Covers:
   - A returning user (onboarding_state == "done") sending "hi"/"hey"/
-    "hello" (any case/whitespace) gets the short prompt directly --
+    "hello" (any case/whitespace, and with trailing punctuation like
+    "Hello!" or "hey??") gets the short prompt directly --
     onboarding.advance() is NOT called, orchestrator.generate() is NOT
     called.
   - A genuinely new business (onboarding_state != "done") sending "hi"
@@ -95,7 +96,7 @@ async def run():
     print("=" * 60)
     print("TEST 1: returning user sends a bare greeting -> short prompt, no onboarding, no generate()")
     print("=" * 60)
-    for i, greeting in enumerate(["hi", "Hi", "HELLO", " hey  ", "hii"]):
+    for i, greeting in enumerate(["hi", "Hi", "HELLO", " hey  ", "hii", "Hello!", "hi.", "hey??", "Hola~"]):
         sent.clear()
         onboarding_calls.clear()
         generate_calls.clear()

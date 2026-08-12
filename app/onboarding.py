@@ -64,6 +64,20 @@ WELCOME_TO_QUESTION_DELAY_SECONDS = 1.5
 
 
 async def advance(business_id: uuid.UUID, msg: IncomingMessage):
+    """
+    Returns None in the normal case. When onboarding just completed,
+    returns (ctx, brief) instead -- the caller (app/router.py) must pass
+    that to orchestrator._run_generation() itself, AFTER this function has
+    returned. Deliberately not run from in here: the whole generation
+    pipeline (several Claude calls, image gen, R2 uploads, its own several
+    DB sessions) is slow, and calling it from inside this function's own
+    `with get_session()` block would mean that session/connection stays
+    checked out, idle, for the pipeline's entire duration, while the
+    pipeline itself needs to check out MORE connections from the same
+    pool for its own work -- a real contention/hang risk under any real
+    concurrent load. See the Aug 2026 "bot goes silent after 'give me a
+    moment'" incident.
+    """
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == business_id).first()
         state = biz.onboarding_state
@@ -225,24 +239,19 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             from app import analytics
             analytics.log_event(business_id, "onboarding_completed", industry=biz.industry)
 
-            # Call _run_generation() directly rather than the normal
-            # generate() entry point -- generate() would run this brief
-            # through the concept-proposal gate, which could decide it
-            # needs more detail and ask ANOTHER question instead of
-            # generating. Maya just said "Give me a moment" -- that's a
-            # promise of immediate action, not another question, so this
-            # bypasses the gate the same way the ADJUST-round-cap escape
-            # hatch in orchestrator.generate() already does. last_generation_id
-            # is genuinely None here (this business's first-ever
-            # generation), which is also what makes reflect_first_result()
-            # fire automatically inside _run_generation().
-            from app.engine.orchestrator import _run_generation
-            await _run_generation(
-                business_id, phone, ctx, brief, brief,
-                last_generation_id=None, is_revision=False,
-                trigger_source="onboarding_complete",
-            )
-            return
+            # Signal to the caller (app/router.py) to call
+            # orchestrator._run_generation() directly, bypassing the
+            # normal generate() entry point's concept-proposal gate --
+            # generate() could decide it needs more detail and ask ANOTHER
+            # question instead of generating, and Maya just said "Give me
+            # a moment", a promise of immediate action. Same bypass the
+            # ADJUST-round-cap escape hatch in orchestrator.generate()
+            # already uses. last_generation_id is genuinely None here
+            # (this business's first-ever generation), which is also what
+            # makes reflect_first_result() fire automatically inside
+            # _run_generation(). NOT called from here -- see this
+            # function's own docstring for why.
+            return ctx, brief
 
         logger.warning("Unknown onboarding state '%s' for business=%s", state, business_id)
         biz.onboarding_state = "new"
