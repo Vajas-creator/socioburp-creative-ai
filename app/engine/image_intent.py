@@ -28,7 +28,7 @@ from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_buttons, download_media
 from app.storage import upload_reference_image, upload_creative
 from app.engine.context import load_business_context
-from app.engine import image_gen, compositor, caption as caption_engine
+from app.engine import image_gen, compositor, caption as caption_engine, learning
 from app.config import settings
 from app import credits, payments
 
@@ -177,6 +177,14 @@ async def _generate_from_instruction(business_id: uuid.UUID, phone: str, referen
 
     ctx, last_generation_id = await load_business_context(business_id)
 
+    # "Moving on = tacit acceptance of whatever came before" -- same
+    # principle app/engine/orchestrator.py's generate() already applies on
+    # its own SPECIFIC_ENOUGH path. Previously missing here entirely, so
+    # the client's preference learning silently stopped the moment they
+    # used this path instead of plain text requests.
+    if last_generation_id:
+        await learning.record_accepted_direction(business_id, last_generation_id)
+
     from app.engine.orchestrator import _run_generation
     await _run_generation(
         business_id, phone, ctx, instruction, instruction,
@@ -199,7 +207,9 @@ async def _use_as_is(business_id: uuid.UUID, phone: str, reference_image_url: st
         await payments.send_topup_options(business_id, phone, prefix="You're out of credits! 🙏 ")
         return
 
-    ctx, _ = await load_business_context(business_id)
+    ctx, last_generation_id = await load_business_context(business_id)
+    if last_generation_id:
+        await learning.record_accepted_direction(business_id, last_generation_id)
 
     await send_text(phone, "🎨 Getting this ready... (~15 seconds)")
 

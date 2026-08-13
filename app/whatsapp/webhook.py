@@ -92,9 +92,19 @@ def parse_message(payload: dict) -> IncomingMessage | None:
                     text=interactive["list_reply"]["title"],
                     message_id=message_id,
                 )
+            # An interactive sub-type we don't recognize -- still a real
+            # message from a real sender, fall through to the generic
+            # "unsupported" reply below rather than silence.
 
+        # A real message (voice note, video, document, sticker, location,
+        # contact card, reaction, poll, order, or any future Meta message
+        # type) that we don't process -- previously this returned None and
+        # the client got NOTHING back, the same silent-drop failure mode as
+        # the "uploaded image with no caption" bug. type="unsupported" lets
+        # app/router.py send an honest "can't handle that yet" reply
+        # instead, while still going through dedup like every other message.
         logger.info("Unhandled message type: %s", msg_type)
-        return None
+        return IncomingMessage(sender=sender, type="unsupported", message_id=message_id)
 
     except (KeyError, IndexError) as e:
         logger.warning("Could not parse webhook payload: %s | payload=%s", e, payload)

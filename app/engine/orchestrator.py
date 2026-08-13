@@ -153,6 +153,16 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         last_generation_id = convo.last_generation_id
         pending_raw = convo.pending_proposal
 
+        # A carousel's Generation row (see generate_carousel()) IS the
+        # business's last_generation_id once it completes, same as any
+        # other generation -- but its built_prompt/base_image_url aren't
+        # shaped for the single-image revision pipeline below. Checked
+        # once here, in the same session, rather than an extra query later.
+        last_generation_is_carousel = False
+        if last_generation_id:
+            last_gen_row = db.query(Generation).filter(Generation.id == last_generation_id).first()
+            last_generation_is_carousel = bool(last_gen_row and last_gen_row.carousel_image_urls)
+
         ctx = BusinessContext(
             name=business.name,
             industry=business.industry,
@@ -312,6 +322,23 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
 
     is_revision = user_intent == "REVISE" and last_generation_id is not None
 
+    if is_revision and last_generation_is_carousel:
+        # Carousels can't be revised yet -- the single-image revision
+        # pipeline reads parent.built_prompt/base_image_url, neither of
+        # which are shaped for a multi-slide parent (see
+        # generate_carousel()'s docstring). Previously this wasn't even
+        # detected: last_generation_id never pointed at a carousel at all
+        # (it was left untouched), so a "make it more premium" right after
+        # a carousel either silently targeted an unrelated older
+        # generation or, if there wasn't one, fell through to a fresh
+        # GENERATE. Explaining this clearly beats either of those.
+        await send_text(
+            phone,
+            "I can't edit a carousel directly yet 🙏 Describe what you'd like changed and "
+            "I'll put together a new one, or ask for a fresh single post instead.",
+        )
+        return
+
     if is_revision:
         # Classify the revision first: a pure "move my logo" request is served
         # from the parent's stored pre-composite background for free, skipping
@@ -379,12 +406,13 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
 
 async def generate_carousel(
     business_id: uuid.UUID, phone: str, ctx: BusinessContext,
-    slide_briefs: list[str], user_message: str, reference_image_url: str | None = None,
+    slide_briefs: list[str], user_message: str, last_generation_id: uuid.UUID | None = None,
+    reference_image_url: str | None = None,
 ):
     """
     Generates len(slide_briefs) genuinely SEPARATE images, one per brief,
-    and posts them together as a native Instagram carousel (see
-    app/instagram.py's content_type="carousel" branch -- the Make.com
+    in parallel, and posts them together as a native Instagram carousel
+    (see app/instagram.py's content_type="carousel" branch -- the Make.com
     scenario already supported this; nothing on the app side ever produced
     a request shaped for it before, and the prior version of this function
     generated a fixed 3 slides with no per-slide content, which is what
@@ -400,6 +428,15 @@ async def generate_carousel(
     CAROUSEL_CREDIT_PER_SLIDE credits per slide; app/engine/carousel.py
     checks the balance before calling this.
 
+    Each slide goes through the same quality gate as a single-image
+    generation (2 candidates, Claude vision scoring, one regen attempt if
+    below threshold) -- an earlier version generated exactly 1 candidate
+    per slide with no scoring at all. Unlike the single-image pipeline,
+    though, an exhausted regen budget does NOT block delivery here: with N
+    independent slides, hard-blocking the whole carousel over one weak
+    slide would throw away the cost already spent on the other, good
+    slides -- see _build_one_slide()'s comment below.
+
     reference_image_url: an uploaded photo (already persisted to R2 by
     app/engine/carousel.py, since WhatsApp media IDs aren't guaranteed to
     stay resolvable across a multi-turn negotiation) to use as the actual
@@ -409,11 +446,16 @@ async def generate_carousel(
     throughout instead of generating unrelated new images that merely
     match the text description.
 
-    Deliberately does NOT update ConversationState.last_generation_id --
-    the single-image revision pipeline (parent.built_prompt,
-    parent.base_image_url) isn't shaped for a multi-slide parent, so a
-    follow-up "make it more premium" should keep targeting the last
-    single-image generation, not this carousel.
+    last_generation_id: whatever was last generated before this carousel
+    (if anything) -- used only for the same "moving on = tacit acceptance"
+    learning signal generate() already applies on its own SPECIFIC_ENOUGH
+    path (previously missing here entirely). This carousel's own
+    Generation.id becomes the new ConversationState.last_generation_id
+    once it completes, same as any other generation -- app/engine/orchestrator.py's
+    generate() checks Generation.carousel_image_urls before attempting a
+    REVISE against it and explains that carousels aren't revisable yet,
+    rather than either silently misapplying a revision to some earlier
+    generation or corrupting a carousel's own row.
     """
     slide_count = len(slide_briefs)
     credit_cost = slide_count * CAROUSEL_CREDIT_PER_SLIDE
@@ -444,39 +486,64 @@ async def generate_carousel(
         )
         return
 
+    if last_generation_id:
+        await learning.record_accepted_direction(business_id, last_generation_id)
+
     await send_text(
         phone,
         f"🎠 Creating your {slide_count}-slide carousel... (~a minute)"
         if slide_count > 1 else "🎨 Creating your design... (~30 seconds)",
     )
 
+    async def _build_one_slide(slide_num: int, slide_brief: str) -> bytes:
+        built = await prompt_builder.build(
+            ctx,
+            (
+                f"This is slide {slide_num} of {slide_count} in an Instagram carousel post -- "
+                f"this specific slide's subject/content is: {slide_brief}. "
+                f"Keep a consistent visual style and color palette with the rest of the "
+                f"carousel, but this slide shows ONLY: {slide_brief}."
+                if slide_count > 1 else slide_brief
+            ),
+        )
+        image_prompt = built["image_prompt"]
+
+        candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_bytes)
+        if not candidates:
+            raise RuntimeError(f"No image returned for carousel slide {slide_num}")
+
+        scored = await quality.score_and_pick(candidates)
+        if scored["best_score"] < REGEN_THRESHOLD and regen_within_budget(business_id):
+            # One regen attempt, same bound as the single-image pipeline.
+            # If the budget's exhausted, deliver the best candidate we
+            # have rather than blocking (see the docstring above) --
+            # different from the single-image pipeline, which blocks
+            # delivery entirely in that case.
+            record_regen_used(business_id)
+            retry_candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_bytes)
+            if retry_candidates:
+                retry_scored = await quality.score_and_pick(retry_candidates)
+                if retry_scored["best_score"] > scored["best_score"]:
+                    candidates = retry_candidates
+                    scored = retry_scored
+
+        slide_image = candidates[scored["best_index"]]
+        if ctx.has_logo:
+            async with httpx.AsyncClient(timeout=15.0) as http_client:
+                logo_resp = await http_client.get(ctx.logo_url)
+                if logo_resp.status_code == 200:
+                    slide_image = compositor.composite_logo(slide_image, logo_resp.content)
+
+        return slide_image
+
     try:
-        slide_images = []
-        for i, slide_brief in enumerate(slide_briefs, start=1):
-            built = await prompt_builder.build(
-                ctx,
-                (
-                    f"This is slide {i} of {slide_count} in an Instagram carousel post -- "
-                    f"this specific slide's subject/content is: {slide_brief}. "
-                    f"Keep a consistent visual style and color palette with the rest of the "
-                    f"carousel, but this slide shows ONLY: {slide_brief}."
-                    if slide_count > 1 else slide_brief
-                ),
-            )
-            candidates = await image_gen.generate_images(
-                built["image_prompt"], count=1, reference_image=reference_bytes,
-            )
-            if not candidates:
-                raise RuntimeError(f"No image returned for carousel slide {i}")
-
-            slide_image = candidates[0]
-            if ctx.has_logo:
-                async with httpx.AsyncClient(timeout=15.0) as http_client:
-                    logo_resp = await http_client.get(ctx.logo_url)
-                    if logo_resp.status_code == 200:
-                        slide_image = compositor.composite_logo(slide_image, logo_resp.content)
-
-            slide_images.append(slide_image)
+        # Every slide is independent -- built concurrently instead of one
+        # at a time, so an 8-slide carousel doesn't take 8x as long as a
+        # single image (this business's message lock is held for the
+        # whole duration either way, see app/router.py).
+        slide_images = list(await asyncio.gather(*[
+            _build_one_slide(i, brief) for i, brief in enumerate(slide_briefs, start=1)
+        ]))
 
         cap = await caption_engine.generate(ctx, user_message)
 
@@ -512,6 +579,10 @@ async def generate_carousel(
             gen_row.caption = cap["caption"]
             gen_row.hashtags = cap["hashtags"]
             gen_row.status = "done"
+
+            convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+            if convo:
+                convo.last_generation_id = generation_id
 
         charge_for_generation(business_id, generation_id, amount=credit_cost)
 

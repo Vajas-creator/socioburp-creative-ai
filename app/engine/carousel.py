@@ -121,6 +121,11 @@ async def _infer_count_and_slides(raw_text: str) -> tuple[int | None, list[str] 
     failure or genuinely vague request -- start() falls back to the full
     ask-count-then-ask-content flow in that case, same as before this
     existed.
+
+    The returned count is NOT range-clamped here (e.g. "12 images" comes
+    back as 12, not None/silently discarded) -- start() checks the range
+    itself so it can tell the client their number was noticed but is out
+    of range, instead of just re-asking with no explanation.
     """
     if not raw_text or not raw_text.strip():
         return None, None
@@ -139,8 +144,6 @@ async def _infer_count_and_slides(raw_text: str) -> tuple[int | None, list[str] 
         count = parsed.get("count")
         if count is not None:
             count = int(count)
-            if not (MIN_SLIDES <= count <= MAX_SLIDES):
-                count = None
 
         slides = parsed.get("slides")
         if slides is not None:
@@ -215,7 +218,9 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
     reference_image_url = await _persist_reference_photo(business_id, msg)
     original_message = msg.text or ""
 
-    inferred_count, inferred_slides = await _infer_count_and_slides(original_message)
+    raw_count, inferred_slides = await _infer_count_and_slides(original_message)
+    count_out_of_range = raw_count is not None and not (MIN_SLIDES <= raw_count <= MAX_SLIDES)
+    inferred_count = raw_count if not count_out_of_range else None
 
     if inferred_slides:
         # They already broke it down into per-slide items -- nothing left
@@ -229,11 +234,12 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
             )
             return
         slide_briefs = await _parse_slide_briefs(", ".join(inferred_slides), count)
-        ctx, _ = await load_business_context(business_id)
+        ctx, last_generation_id = await load_business_context(business_id)
         from app.engine.orchestrator import generate_carousel
         await generate_carousel(
             business_id, phone, ctx, slide_briefs,
-            user_message=original_message, reference_image_url=reference_image_url,
+            user_message=original_message, last_generation_id=last_generation_id,
+            reference_image_url=reference_image_url,
         )
         return
 
@@ -262,7 +268,12 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
             )
         return
 
-    # Genuinely vague ("make me a carousel") -- ask count first.
+    # Genuinely vague ("make me a carousel") -- ask count first. If they
+    # DID state a number but it was out of range (e.g. "12 images"), say
+    # so explicitly instead of just re-asking with no explanation.
+    if count_out_of_range:
+        await send_text(phone, f"I can do {MIN_SLIDES}-{MAX_SLIDES} images per carousel — pick a number:")
+
     pending = {
         "stage": "awaiting_count",
         "original_message": original_message,
@@ -353,13 +364,13 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str
         _clear_pending(business_id)
 
         slide_briefs = await _parse_slide_briefs(msg.text.strip(), count)
-        ctx, _ = await load_business_context(business_id)
+        ctx, last_generation_id = await load_business_context(business_id)
 
         from app.engine.orchestrator import generate_carousel
         await generate_carousel(
             business_id, phone, ctx, slide_briefs,
             user_message=original_message or msg.text.strip(),
-            reference_image_url=reference_image_url,
+            last_generation_id=last_generation_id, reference_image_url=reference_image_url,
         )
         return
 

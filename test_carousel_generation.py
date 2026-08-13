@@ -153,6 +153,16 @@ async def fake_generate_images(prompt, count=2, reference_image=None):
 image_gen.generate_images = fake_generate_images
 orch.image_gen.generate_images = fake_generate_images
 
+from app.engine import quality  # noqa: E402
+
+
+async def fake_score_and_pick(images):
+    return {"best_index": 0, "best_score": 90, "issues": []}
+
+
+quality.score_and_pick = fake_score_and_pick
+orch.quality.score_and_pick = fake_score_and_pick
+
 from app.engine import caption as caption_engine  # noqa: E402
 
 

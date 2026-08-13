@@ -16,7 +16,10 @@ Covers:
   - text and button-reply messages still parse correctly (no regression)
   - a list reply (send_list()'s tap-to-open menu, e.g. the carousel
     slide-count picker) parses with the same shape as a button reply
-  - an unrecognized message type still returns None
+  - an unrecognized message type (voice note, video, sticker, etc.)
+    parses as type="unsupported" -- NOT None, which used to mean total
+    silence, never a reply to the client (see app/router.py's handling)
+  - a genuinely non-message webhook event (status update) still None
 """
 import sys
 import os
@@ -106,11 +109,29 @@ def run():
     print("PASS: list reply parsed with the same shape as a button reply\n")
 
     print("=" * 60)
-    print("TEST 5: unrecognized message type -> None")
+    print("TEST 5: unrecognized message type (voice note, video, sticker, ...) -> type='unsupported', NOT None")
     print("=" * 60)
-    msg = parse_message(_payload({"from": "919999999920", "id": "wamid.X", "type": "sticker"}))
-    assert msg is None, f"FAIL: expected None for an unhandled type, got {msg}"
-    print("PASS: unrecognized type correctly ignored\n")
+    # Previously this returned None, and the client got total silence --
+    # the same failure mode as the "uploaded image with no caption" bug.
+    # type="unsupported" (carrying sender/message_id through, for dedup and
+    # so app/router.py can reply) lets router.py send an honest "can't
+    # handle that yet" message instead. See app/router.py's
+    # `if msg.type == "unsupported":` check.
+    for unhandled_type in ("sticker", "audio", "video", "document", "location", "contacts", "reaction", "order"):
+        msg = parse_message(_payload({"from": "919999999920", "id": f"wamid.{unhandled_type}", "type": unhandled_type}))
+        assert msg is not None, f"FAIL: expected an IncomingMessage for type={unhandled_type!r}, got None (silent drop)"
+        assert msg.type == "unsupported", f"FAIL: expected type='unsupported' for {unhandled_type!r}, got {msg.type!r}"
+        assert msg.sender == "919999999920"
+        assert msg.message_id == f"wamid.{unhandled_type}", "FAIL: expected message_id preserved for dedup"
+    print("PASS: every unhandled message type parses as type='unsupported', never silently dropped\n")
+
+    print("=" * 60)
+    print("TEST 6: a webhook event with no 'messages' key (e.g. a delivery/read status update) -> still None")
+    print("=" * 60)
+    status_payload = {"entry": [{"changes": [{"value": {"statuses": [{"status": "delivered"}]}}]}]}
+    msg = parse_message(status_payload)
+    assert msg is None, f"FAIL: expected None for a non-message webhook event, got {msg}"
+    print("PASS: non-message events (status updates) still correctly ignored\n")
 
     print("ALL TESTS PASSED")
 

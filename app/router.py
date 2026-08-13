@@ -39,6 +39,19 @@ logger = logging.getLogger("socioburp.router")
 # case that doesn't need a Claude call to recognize.
 BARE_GREETINGS = {"hi", "hey", "hello", "hii", "hiii", "heya", "hola", "yo"}
 
+# A pending carousel/image-upload negotiation (see app/engine/carousel.py,
+# app/engine/image_intent.py) normally treats EVERY reply as belonging to
+# that negotiation -- simple and correct for genuine free-text answers.
+# But these specific words are already unambiguous, exact-match global
+# commands everywhere ELSE in this router (see the checks further down);
+# typing one of them mid-negotiation is far more likely to mean "actually,
+# forget that, I want X" than a literal answer to the pending question
+# ("credits" as a slide description makes no sense). Deliberately narrow --
+# NOT a general "detect topic switch" heuristic, which would be far
+# riskier to get right. "cancel" itself isn't listed here: it's already
+# handled inside carousel.advance()/image_intent.advance() directly.
+UNAMBIGUOUS_GLOBAL_COMMANDS = {"credits", "balance", "topup", "history"}
+
 _business_locks: dict[uuid.UUID, asyncio.Lock] = {}
 _locks_registry_lock = asyncio.Lock()  # protects creation of new per-business locks only
 
@@ -101,6 +114,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         onboarding_state = biz.onboarding_state
+        business_name = biz.name
         convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
         pending_carousel = convo.pending_carousel if convo else None
         pending_image_intent = convo.pending_image_intent if convo else None
@@ -124,10 +138,33 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
             )
         return
 
+    # Computed early -- needed both for the pending-negotiation escape
+    # hatch right below and the global keywords further down.
+    text_lower = (msg.text or "").strip().lower()
+
     # --- An in-progress carousel negotiation (slide count / per-slide
     # content) takes priority over everything below, same principle as
     # onboarding above -- every reply belongs to that negotiation until it
-    # finishes or the client cancels. See app/engine/carousel.py.
+    # finishes or the client cancels. See app/engine/carousel.py. EXCEPT
+    # an unambiguous global command (see UNAMBIGUOUS_GLOBAL_COMMANDS
+    # above), or explicitly asking for a carousel while mid-image-upload
+    # negotiation -- both read as "switch context", not an answer to the
+    # pending question, so the negotiation is dropped and the message
+    # falls through to be handled normally instead.
+    if pending_carousel and text_lower in UNAMBIGUOUS_GLOBAL_COMMANDS:
+        with get_session() as db:
+            convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
+            if convo:
+                convo.pending_carousel = None
+        pending_carousel = None
+
+    if pending_image_intent and (text_lower in UNAMBIGUOUS_GLOBAL_COMMANDS or "carousel" in text_lower):
+        with get_session() as db:
+            convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
+            if convo:
+                convo.pending_image_intent = None
+        pending_image_intent = None
+
     if pending_carousel:
         from app.engine import carousel
         await carousel.advance(biz_id, msg, pending_carousel)
@@ -146,8 +183,14 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     # in this app to key off instead).
     analytics.maybe_log_voluntary_return(biz_id)
 
-    # --- Global keywords, available any time post-onboarding ---
-    text_lower = (msg.text or "").strip().lower()
+    # --- A message type we genuinely can't process (voice note, video,
+    # document, sticker, location, contact card, ...) -- acknowledge
+    # instead of silently dropping it. See app/whatsapp/webhook.py's
+    # parse_message(), which used to return None here (total silence, the
+    # same failure mode the "uploaded image with no caption" bug had).
+    if msg.type == "unsupported":
+        await send_text(msg.sender, "I can only understand text messages and photos right now 🙏 Could you try one of those?")
+        return
 
     # A returning user (already onboarded, hence past the state check
     # above) saying just "hi" gets a short, direct prompt -- never routed
@@ -160,7 +203,16 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     # tolerate that.
     greeting_candidate = text_lower.rstrip("!.,?~ ")
     if greeting_candidate in BARE_GREETINGS:
-        await send_text(msg.sender, "Hey! Want today's post? I've got an idea. 💡")
+        # Personal, not generic -- addresses them by name (whatever's on
+        # file from onboarding) so a returning client feels like they're
+        # picking a conversation back up with someone who knows them, not
+        # re-introducing themselves to a form. Falls back to the old
+        # generic line only if no name was ever captured.
+        greeting = (
+            f"Hey {business_name}! How's it going? What do you want me to build today? 💡"
+            if business_name else "Hey! Want today's post? I've got an idea. 💡"
+        )
+        await send_text(msg.sender, greeting)
         return
 
     if persona.is_identity_question(msg.text or ""):
