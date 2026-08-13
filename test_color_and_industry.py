@@ -184,6 +184,9 @@ async def part_c():
 
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="hi"))
     await asyncio.sleep(0.05)
+    assert state() == "awaiting_owner_name", f"FAIL: {state()}"
+
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     assert state() == "awaiting_business_description", f"FAIL: {state()}"
 
     sent.clear()

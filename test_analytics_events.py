@@ -171,6 +171,7 @@ async def run():
         biz2_id = biz2.id
 
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="hi"))
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # owner-name question
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="I run a bakery"))
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))
 

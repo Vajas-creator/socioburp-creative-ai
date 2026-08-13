@@ -24,8 +24,9 @@ class Business(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     phone = Column(String(20), unique=True, nullable=False, index=True)  # WhatsApp number = identity
     name = Column(String(200))  # best-effort, extracted from their business-description answer; often NULL -- see app/onboarding.py
+    owner_name = Column(Text, nullable=True)  # the client's own name, asked once during onboarding -- see app/onboarding.py's "awaiting_owner_name" state. Preferred over `name` (the business name) for addressing them personally, e.g. app/router.py's bare-greeting reply
     industry = Column(String(100))  # free text now (e.g. "handmade gifting business"), not a fixed category -- see app/onboarding.py
-    onboarding_state = Column(String(50), default="new")  # new -> awaiting_business_description -> awaiting_instagram -> done
+    onboarding_state = Column(String(50), default="new")  # new -> awaiting_owner_name -> awaiting_business_description -> awaiting_instagram -> done
     instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting (auto-POSTING -- separate from instagram_handle below, which is just what the client told us during onboarding)
     instagram_handle = Column(Text, nullable=True)  # whatever the client sent when asked for their Instagram page (handle, link, or just left as text) -- see app/onboarding.py's "awaiting_instagram" state
     regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased

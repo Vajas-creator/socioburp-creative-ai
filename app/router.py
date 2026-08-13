@@ -114,7 +114,11 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         onboarding_state = biz.onboarding_state
-        business_name = biz.name
+        # Owner's own name (asked once during onboarding, purely for
+        # personalization) is preferred over the business name for
+        # addressing them directly -- "Hey Priya!" reads more like a
+        # person than "Hey Copper & Crumb!".
+        display_name = biz.owner_name or biz.name
         convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
         pending_carousel = convo.pending_carousel if convo else None
         pending_image_intent = convo.pending_image_intent if convo else None
@@ -209,8 +213,8 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         # re-introducing themselves to a form. Falls back to the old
         # generic line only if no name was ever captured.
         greeting = (
-            f"Hey {business_name}! How's it going? What do you want me to build today? 💡"
-            if business_name else "Hey! Want today's post? I've got an idea. 💡"
+            f"Hey {display_name}! How's it going? What do you want me to build today? 💡"
+            if display_name else "Hey! Want today's post? I've got an idea. 💡"
         )
         await send_text(msg.sender, greeting)
         return
