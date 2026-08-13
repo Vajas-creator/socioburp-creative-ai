@@ -76,3 +76,15 @@ def upload_carousel_slide(business_id: uuid.UUID, generation_id: uuid.UUID, slid
     """One slide (1-indexed) of a carousel generation -- see Generation.carousel_image_urls."""
     key = f"creatives/{business_id}/{generation_id}_slide{slide_num}.png"
     return _upload(key, image_bytes, "image/png")
+
+
+def upload_reference_image(business_id: uuid.UUID, image_bytes: bytes) -> str:
+    """
+    A client's uploaded photo, persisted immediately so it survives a
+    multi-turn negotiation (carousel slide-count/content questions, or
+    "what would you like me to do with this image") without depending on
+    WhatsApp's media_id staying resolvable for however long that takes --
+    see app/engine/carousel.py and app/engine/image_intent.py.
+    """
+    key = f"references/{business_id}/{uuid.uuid4()}.png"
+    return _upload(key, image_bytes, "image/png")

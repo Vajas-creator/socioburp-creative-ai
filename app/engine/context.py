@@ -33,3 +33,49 @@ class BusinessContext:
     @property
     def has_logo(self) -> bool:
         return bool(self.logo_url)
+
+
+async def load_business_context(business_id):
+    """
+    Loads a BusinessContext + the business's current last_generation_id in
+    one go, for callers that need ctx but aren't already inside their own
+    `with get_session()` block for some other reason at the same time --
+    see app/engine/carousel.py and app/engine/image_intent.py.
+    app/engine/orchestrator.py's generate() builds its own inline instead,
+    since it also needs that open session for the pending_proposal and
+    rate-limit checks running alongside it.
+
+    Imports are function-local, not module-level -- this module is
+    imported very widely (almost everything needs BusinessContext), so
+    keeping it free of app.db/app.models imports at load time avoids any
+    risk of introducing an import cycle.
+    """
+    from app.db import get_session
+    from app.models import Business, BrandProfile, ConversationState
+    from app.engine import industry_research
+
+    with get_session() as db:
+        business = db.query(Business).filter(Business.id == business_id).first()
+        profile = db.query(BrandProfile).filter(BrandProfile.business_id == business_id).first()
+        convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+        last_generation_id = convo.last_generation_id if convo else None
+
+        ctx = BusinessContext(
+            name=business.name,
+            industry=business.industry,
+            tone=profile.tone if profile else None,
+            primary_color=profile.primary_color if profile else None,
+            secondary_color=profile.secondary_color if profile else None,
+            target_audience=profile.target_audience if profile else None,
+            website=profile.website if profile else None,
+            contact_phone=profile.contact_phone if profile else None,
+            logo_url=profile.logo_url if profile else None,
+            learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
+            style_summary=(profile.extras or {}).get("style_summary") if profile else None,
+            language=business.preferred_language or "en",
+            industry_style=industry_research.get_cached_style(business.industry),
+            instagram_handle=business.instagram_handle,
+            instagram_bio=profile.instagram_bio if profile else None,
+            instagram_recent_captions=profile.instagram_recent_captions if profile else None,
+        )
+        return ctx, last_generation_id

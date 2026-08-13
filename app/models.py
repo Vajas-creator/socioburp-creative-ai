@@ -120,6 +120,13 @@ class ConversationState(Base):
     business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), primary_key=True)
     last_generation_id = Column(UUID(as_uuid=True), nullable=True)
     pending_proposal = Column(Text, nullable=True)
+    # JSON-in-Text, same pattern as pending_proposal above -- tracks an
+    # in-progress carousel negotiation (slide count, then per-slide
+    # content) across multiple incoming messages. See app/engine/carousel.py.
+    pending_carousel = Column(Text, nullable=True)
+    # Tracks an in-progress "what should I do with this uploaded photo"
+    # negotiation -- see app/engine/image_intent.py.
+    pending_image_intent = Column(Text, nullable=True)
     context = Column(JSONB, default=dict)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -14,6 +14,8 @@ Covers:
   - image message WITH a caption -> text is the caption
   - image message with NO caption -> text is None (unchanged, correct)
   - text and button-reply messages still parse correctly (no regression)
+  - a list reply (send_list()'s tap-to-open menu, e.g. the carousel
+    slide-count picker) parses with the same shape as a button reply
   - an unrecognized message type still returns None
 """
 import sys
@@ -89,6 +91,19 @@ def run():
     assert msg.type == "button"
     assert msg.button_id == "post_ig_abc"
     print("PASS: button reply unaffected\n")
+
+    print("=" * 60)
+    print("TEST 4b: list reply (e.g. carousel slide-count picker) parses like a button reply")
+    print("=" * 60)
+    msg = parse_message(_payload({
+        "from": "919999999920", "id": "wamid.LIST1", "type": "interactive",
+        "interactive": {"type": "list_reply", "list_reply": {"id": "carousel_count_5", "title": "5 images"}},
+    }))
+    assert msg is not None
+    assert msg.type == "button", f"FAIL: expected list replies handled like button replies, got type={msg.type!r}"
+    assert msg.button_id == "carousel_count_5", f"FAIL: expected the row id as button_id, got {msg.button_id!r}"
+    assert msg.text == "5 images", f"FAIL: expected the row title as text, got {msg.text!r}"
+    print("PASS: list reply parsed with the same shape as a button reply\n")
 
     print("=" * 60)
     print("TEST 5: unrecognized message type -> None")

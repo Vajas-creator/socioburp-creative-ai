@@ -81,6 +81,17 @@ def parse_message(payload: dict) -> IncomingMessage | None:
                     text=interactive["button_reply"]["title"],
                     message_id=message_id,
                 )
+            if interactive["type"] == "list_reply":
+                # A tap on a send_list() row (e.g. picking a carousel slide
+                # count) -- same shape/handling as a button_reply downstream,
+                # callers key off button_id either way.
+                return IncomingMessage(
+                    sender=sender,
+                    type="button",
+                    button_id=interactive["list_reply"]["id"],
+                    text=interactive["list_reply"]["title"],
+                    message_id=message_id,
+                )
 
         logger.info("Unhandled message type: %s", msg_type)
         return None
