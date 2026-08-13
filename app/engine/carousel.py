@@ -1,6 +1,6 @@
 """
 Multi-turn carousel negotiation: a "carousel" keyword (see app/router.py)
-now asks how many slides (1-8, via a WhatsApp list message) and what each
+now asks how many slides (1-9, via a WhatsApp list message) and what each
 slide should show, BEFORE generating anything -- replaces the previous
 behavior, which silently generated a fixed 3 slides with no per-slide
 content and, per the Aug 2026 live-test report, sometimes produced a
@@ -10,7 +10,7 @@ fell through to the old single-image pipeline entirely.
 State is tracked on ConversationState.pending_carousel (JSON-in-Text, same
 pattern as concept_proposal.py's pending_proposal) so the negotiation
 survives across separate incoming messages:
-  stage "awaiting_count"          -> waiting for a 1-8 reply
+  stage "awaiting_count"          -> waiting for a 1-9 reply
   stage "awaiting_slide_content"  -> waiting for what each slide shows
 
 If a photo is attached to the very first "carousel" message (or to either
@@ -41,7 +41,7 @@ from app.config import settings
 from app.anthropic_client import create_message
 
 MIN_SLIDES = 1
-MAX_SLIDES = 8
+MAX_SLIDES = 9
 
 CANCEL_WORDS = {"cancel", "never mind", "nevermind", "skip", "stop"}
 
