@@ -194,6 +194,7 @@ async def part2_onboarding_wiring():
         biz_id = biz.id
 
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="hi"))
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))  # owner-name question
     sent.clear()
     understand_calls.clear()
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small restaurant called Test Restaurant"))

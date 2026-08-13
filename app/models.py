@@ -24,8 +24,9 @@ class Business(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
     phone = Column(String(20), unique=True, nullable=False, index=True)  # WhatsApp number = identity
     name = Column(String(200))  # best-effort, extracted from their business-description answer; often NULL -- see app/onboarding.py
+    owner_name = Column(Text, nullable=True)  # the client's own name, asked once during onboarding -- see app/onboarding.py's "awaiting_owner_name" state. Preferred over `name` (the business name) for addressing them personally, e.g. app/router.py's bare-greeting reply
     industry = Column(String(100))  # free text now (e.g. "handmade gifting business"), not a fixed category -- see app/onboarding.py
-    onboarding_state = Column(String(50), default="new")  # new -> awaiting_business_description -> awaiting_instagram -> done
+    onboarding_state = Column(String(50), default="new")  # new -> awaiting_owner_name -> awaiting_business_description -> awaiting_instagram -> done
     instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting (auto-POSTING -- separate from instagram_handle below, which is just what the client told us during onboarding)
     instagram_handle = Column(Text, nullable=True)  # whatever the client sent when asked for their Instagram page (handle, link, or just left as text) -- see app/onboarding.py's "awaiting_instagram" state
     regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased
@@ -87,10 +88,14 @@ class Generation(Base):
     status = Column(String(20), default="pending")  # pending -> generating -> done -> failed -> blocked (budget cap hit)
     posted_to_instagram = Column(Boolean, nullable=False, default=False)
     # How this generation got triggered: 'specific_enough' | 'proposal_confirmed' |
-    # 'adjust_cap' | 'revision' | 'logo_free_revision' | 'onboarding_complete'
-    # (auto-triggered the moment onboarding finishes, bypassing the concept-
-    # proposal gate -- see app/onboarding.py). Nullable for rows created
-    # before this column existed. Also 'carousel', see below.
+    # 'adjust_ready' (the client's ADJUST reply was already specific enough
+    # to skip re-proposing and waiting for a separate confirm -- see
+    # concept_proposal.interpret_reply()'s ready_to_generate) | 'adjust_cap' |
+    # 'revision' | 'logo_free_revision' | 'onboarding_complete' (auto-triggered
+    # the moment onboarding finishes, bypassing the concept-proposal gate --
+    # see app/onboarding.py) | 'image_intent' | 'image_intent_as_is'
+    # (see app/engine/image_intent.py) | 'carousel' (see below). Nullable
+    # for rows created before this column existed.
     trigger_source = Column(String(30), nullable=True)
     # Set only for a carousel post (trigger_source='carousel') -- ordered
     # list of each slide's R2 URL. image_url above still holds the FIRST
@@ -120,6 +125,13 @@ class ConversationState(Base):
     business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), primary_key=True)
     last_generation_id = Column(UUID(as_uuid=True), nullable=True)
     pending_proposal = Column(Text, nullable=True)
+    # JSON-in-Text, same pattern as pending_proposal above -- tracks an
+    # in-progress carousel negotiation (slide count, then per-slide
+    # content) across multiple incoming messages. See app/engine/carousel.py.
+    pending_carousel = Column(Text, nullable=True)
+    # Tracks an in-progress "what should I do with this uploaded photo"
+    # negotiation -- see app/engine/image_intent.py.
+    pending_image_intent = Column(Text, nullable=True)
     context = Column(JSONB, default=dict)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 

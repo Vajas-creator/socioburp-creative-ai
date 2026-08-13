@@ -2,7 +2,17 @@
 Onboarding state machine. Persisted on the Business row so a client can go
 silent mid-flow and resume later without losing progress.
 
-States: new -> awaiting_business_description -> awaiting_instagram -> done
+States: new -> awaiting_owner_name -> awaiting_business_description ->
+awaiting_instagram -> done
+
+awaiting_owner_name (added Aug 2026): asks the client's own name, once,
+right after the welcome message -- purely for personalization (see
+app/router.py's bare-greeting reply, which addresses a returning client
+by Business.owner_name in preference to Business.name, the business
+name). Optional, like the Instagram question: a skip/decline or empty
+reply never blocks onboarding completion, it just means personalized
+greetings fall back to the business name (or the old generic line if
+that's unset too).
 
 Redesigned Aug 2026: cut from a 5-question flow (name, industry, logo,
 colors, tone) down to 2 open-ended questions -- what does your business
@@ -56,6 +66,7 @@ LANGUAGE_OVERRIDE_KEYWORDS = {
 }
 
 INSTAGRAM_SKIP_WORDS = ("skip", "no", "none", "don't have one", "dont have one", "n/a", "na")
+NAME_SKIP_WORDS = ("skip", "no", "none", "n/a", "na", "prefer not to say", "rather not say")
 
 # A short pause between the welcome message and the first real question --
 # staged, conversational pacing rather than a wall of text at once. Module
@@ -136,6 +147,21 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             await send_text(phone, welcome)
 
             await asyncio.sleep(WELCOME_TO_QUESTION_DELAY_SECONDS)
+
+            ask_name = await i18n.t(
+                "ask_owner_name", language,
+                "First, what's your name?",
+            )
+            await send_text(phone, ask_name)
+            biz.onboarding_state = "awaiting_owner_name"
+            return
+
+        if state == "awaiting_owner_name":
+            if msg.text and msg.text.strip() and text_lower not in NAME_SKIP_WORDS:
+                biz.owner_name = msg.text.strip()[:100]
+            # Optional, same as the Instagram question -- a skip/decline
+            # or empty reply never blocks onboarding, personalized
+            # greetings just fall back to the business name instead.
 
             ask_business = await i18n.t(
                 "ask_business_description", language,

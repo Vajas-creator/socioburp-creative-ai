@@ -9,12 +9,20 @@ something like..."). Now it's intercepted early with a short, direct
 prompt, without ever reaching intent classification or (for a genuinely
 new business) re-running onboarding.
 
+The prompt is personalized with the business's name (whatever's on file
+from onboarding) rather than a generic line -- a returning client should
+feel like they're picking a conversation back up with someone who knows
+them, not re-introducing themselves. Falls back to the old generic line
+only if no name was ever captured.
+
 Covers:
   - A returning user (onboarding_state == "done") sending "hi"/"hey"/
     "hello" (any case/whitespace, and with trailing punctuation like
-    "Hello!" or "hey??") gets the short prompt directly --
+    "Hello!" or "hey??") gets the short, personalized prompt directly --
     onboarding.advance() is NOT called, orchestrator.generate() is NOT
     called.
+  - A business with no name on file gets the generic fallback greeting
+    instead of "Hey None!".
   - A genuinely new business (onboarding_state != "done") sending "hi"
     still goes to onboarding.advance() as before -- the greeting
     shortcut only applies to already-onboarded businesses.
@@ -106,11 +114,29 @@ async def run():
         await router._process_message(biz_id, IncomingMessage(sender=phone, type="text", text=greeting))
 
         assert len(sent) == 1, f"FAIL ({greeting!r}): expected exactly 1 message, got {sent}"
-        assert sent[0] == "Hey! Want today's post? I've got an idea. 💡", f"FAIL ({greeting!r}): expected the short creative prompt, got {sent[0]!r}"
+        assert sent[0] == "Hey Test Biz! How's it going? What do you want me to build today? 💡", (
+            f"FAIL ({greeting!r}): expected the personalized creative prompt, got {sent[0]!r}"
+        )
         assert onboarding_calls == [], f"FAIL ({greeting!r}): onboarding should NOT run for a returning user, got {onboarding_calls}"
         assert generate_calls == [], f"FAIL ({greeting!r}): generate() should NOT run for a bare greeting, got {generate_calls}"
         print(f"PASS ({greeting!r}): {sent[0]!r}")
     print()
+
+    print("=" * 60)
+    print("TEST 1b: a business with no name on file falls back to the generic greeting")
+    print("=" * 60)
+    sent.clear()
+    phone_noname = "919999999959"
+    with get_session() as db:
+        biz_noname = Business(phone=phone_noname, name=None, industry="salon", onboarding_state="done")
+        db.add(biz_noname)
+        db.flush()
+        biz_noname_id = biz_noname.id
+        add_credits(db, biz_noname_id, 20, reason="signup_bonus")
+
+    await router._process_message(biz_noname_id, IncomingMessage(sender=phone_noname, type="text", text="hi"))
+    assert sent == ["Hey! Want today's post? I've got an idea. 💡"], f"FAIL: expected the generic fallback greeting, got {sent}"
+    print(f"PASS: {sent[0]!r}\n")
 
     print("=" * 60)
     print("TEST 2: genuinely new business sends 'hi' -> still routes to onboarding, NOT the short prompt")

@@ -174,7 +174,7 @@ async def part_c():
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         assert biz.preferred_language == "hi", f"FAIL: expected preferred_language='hi' detected from first message, got {biz.preferred_language!r}"
-        assert biz.onboarding_state == "awaiting_business_description", f"FAIL: expected state advanced to awaiting_business_description, got {biz.onboarding_state!r}"
+        assert biz.onboarding_state == "awaiting_owner_name", f"FAIL: expected state advanced to awaiting_owner_name, got {biz.onboarding_state!r}"
 
     assert any("[HI:welcome]" in s for s in sent), f"FAIL: expected the translated welcome message sent, got {sent}"
     print(f"PASS: first message in Hindi correctly detected and stored, translated welcome sent: {sent[-1][:60]}...\n")

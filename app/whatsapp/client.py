@@ -99,6 +99,37 @@ async def send_buttons(to: str, body: str, buttons: list[tuple[str, str]]):
     return await _post(payload)
 
 
+async def send_list(to: str, body: str, button_text: str, rows: list[tuple[str, str]], section_title: str = "Options"):
+    """
+    Send a WhatsApp interactive list message -- a tap-to-open menu of up
+    to 10 rows, for choices too numerous for send_buttons()'s 3-button cap
+    (e.g. picking a carousel slide count from 1-8).
+    `rows` is a list of (id, title) tuples. `button_text` (the label that
+    opens the list) and each row `title` must be <= 20/24 chars
+    respectively (WhatsApp limits) -- both are truncated defensively here.
+    """
+    rows = rows[:10]
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": body},
+            "action": {
+                "button": button_text[:20],
+                "sections": [
+                    {
+                        "title": section_title[:24],
+                        "rows": [{"id": rid, "title": title[:24]} for rid, title in rows],
+                    }
+                ],
+            },
+        },
+    }
+    return await _post(payload)
+
+
 async def download_media(media_id: str) -> bytes:
     """
     Two-step download per WhatsApp API: first resolve media_id -> temporary URL,

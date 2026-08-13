@@ -15,7 +15,7 @@ Covers:
     pending_first_request stored.
   - A specific first request gets the SAME welcome text, but IS stored on
     pending_first_request -- the question sequence itself is unchanged
-    (still asks "what does your business do?" first).
+    (still asks the owner's name, then "what does your business do?").
   - Once onboarding completes (Instagram step answered), a stored
     pending_first_request is used as the auto-generation brief -- the
     client never has to repeat themselves.
@@ -138,12 +138,14 @@ def _make_business(phone):
 
 async def _complete_rest_of_onboarding(biz_id, phone):
     """
-    Drives business-description -> Instagram (skipped), the full remaining
-    flow. advance() itself no longer calls _run_generation() when
-    onboarding completes -- it returns (ctx, brief) instead, and the
-    caller (app/router.py in production) is responsible for invoking
-    _run_generation(). Simulate that hand-off here, same as production.
+    Drives owner-name (skipped) -> business-description -> Instagram
+    (skipped), the full remaining flow. advance() itself no longer calls
+    _run_generation() when onboarding completes -- it returns (ctx, brief)
+    instead, and the caller (app/router.py in production) is responsible
+    for invoking _run_generation(). Simulate that hand-off here, same as
+    production.
     """
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small bakery"))
     result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     if result is not None:
@@ -168,11 +170,11 @@ async def run():
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         assert biz.pending_first_request is None, f"FAIL: expected no pending request for a greeting, got {biz.pending_first_request!r}"
-        assert biz.onboarding_state == "awaiting_business_description"
+        assert biz.onboarding_state == "awaiting_owner_name"
 
     welcome_text = sent[0][1]
     assert welcome_text.startswith("Hi, I'm Sakshi."), f"FAIL: expected the standard Sakshi welcome, got {welcome_text!r}"
-    assert sent[1][1] == "Let's start simple. What does your business do?", f"FAIL: expected the staged second message, got {sent[1]!r}"
+    assert sent[1][1] == "First, what's your name?", f"FAIL: expected the staged name question, got {sent[1]!r}"
     print(f"PASS: greeting got the standard welcome + staged question, nothing stored: {[s[1] for s in sent]}\n")
 
     print("=" * 60)
@@ -190,7 +192,7 @@ async def run():
         assert biz.pending_first_request == original_request, (
             f"FAIL: expected the original request stored verbatim, got {biz.pending_first_request!r}"
         )
-        assert biz.onboarding_state == "awaiting_business_description", "FAIL: question sequence should be unchanged (still asks about the business first)"
+        assert biz.onboarding_state == "awaiting_owner_name", "FAIL: question sequence should be unchanged (still asks the owner's name first)"
 
     welcome_text = sent[0][1]
     assert welcome_text.startswith("Hi, I'm Sakshi."), f"FAIL: expected the same standard welcome, got {welcome_text!r}"

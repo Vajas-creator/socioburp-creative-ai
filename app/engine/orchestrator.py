@@ -52,7 +52,7 @@ from app.db import get_session
 from app.models import Business, BrandProfile, Generation, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_image, send_image_with_button, download_media
-from app.storage import upload_creative, upload_base_image, upload_carousel_slide
+from app.storage import upload_creative, upload_base_image, upload_carousel_slide, upload_reference_image
 from app.credits import charge_for_generation, get_balance, regen_within_budget, record_regen_used
 from app.config import settings
 from app.engine.context import BusinessContext
@@ -71,8 +71,9 @@ from app.engine import brand_reflection
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
 REGEN_THRESHOLD = 60
-CAROUSEL_SLIDE_COUNT = 3
-CAROUSEL_CREDIT_COST = 3  # 1 credit per slide, same rate as a single creative
+CAROUSEL_MIN_SLIDES = 1
+CAROUSEL_MAX_SLIDES = 8
+CAROUSEL_CREDIT_PER_SLIDE = 1  # same rate as a single creative
 
 
 def _check_rate_limit(db, business_id: uuid.UUID) -> bool:
@@ -114,6 +115,10 @@ async def _deliver_creative(phone: str, business_id: uuid.UUID, generation_id: u
 
 
 async def generate(business_id: uuid.UUID, msg: IncomingMessage):
+    # An image with NO caption is now intercepted in app/router.py before
+    # ever reaching here -- see app/engine/image_intent.py, which asks
+    # what to do with it instead of this generic bail-out. This still
+    # applies to a genuinely empty/unsupported text message.
     if not msg.text:
         await send_text(msg.sender, "Please describe what you'd like as a text message 🙂")
         return
@@ -147,6 +152,16 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             db.flush()
         last_generation_id = convo.last_generation_id
         pending_raw = convo.pending_proposal
+
+        # A carousel's Generation row (see generate_carousel()) IS the
+        # business's last_generation_id once it completes, same as any
+        # other generation -- but its built_prompt/base_image_url aren't
+        # shaped for the single-image revision pipeline below. Checked
+        # once here, in the same session, rather than an extra query later.
+        last_generation_is_carousel = False
+        if last_generation_id:
+            last_gen_row = db.query(Generation).filter(Generation.id == last_generation_id).first()
+            last_generation_is_carousel = bool(last_gen_row and last_gen_row.carousel_image_urls)
 
         ctx = BusinessContext(
             name=business.name,
@@ -182,6 +197,37 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         pending = json.loads(pending_raw)
         result = await concept_proposal.interpret_reply(ctx, pending["proposal_text"], msg.text)
 
+        # A photo attached to THIS reply takes priority over one stored
+        # from an earlier turn in the same negotiation; persist a fresh
+        # one immediately (R2, not just the WhatsApp media_id) so it
+        # survives however many more ADJUST rounds happen before this
+        # actually generates -- previously a photo attached to a request
+        # vague enough to need a proposal was simply dropped and never
+        # revisited, even once the client confirmed. See the Aug 2026
+        # "uploaded reference images are being ignored" investigation.
+        reference_image_url = pending.get("reference_image_url")
+        if reference_image is not None:
+            try:
+                reference_image_url = await asyncio.to_thread(upload_reference_image, business_id, reference_image)
+            except Exception:
+                logger.exception("Failed to persist reference photo during proposal negotiation for business=%s", business_id)
+
+        async def _resolve_reference_bytes():
+            """Prefer bytes already downloaded on THIS message; otherwise fetch whatever's stored from an earlier turn."""
+            if reference_image is not None:
+                return reference_image
+            if not reference_image_url:
+                return None
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as http_client:
+                    resp = await http_client.get(reference_image_url)
+                if resp.status_code == 200:
+                    return resp.content
+                logger.warning("Fetching stored proposal reference image returned %s", resp.status_code)
+            except Exception:
+                logger.exception("Failed to fetch stored proposal reference image for business=%s", business_id)
+            return None
+
         if result["classification"] == "RETRY":
             # interpret_reply() itself failed (API hiccup) — ask again rather
             # than guessing. pending_proposal is deliberately left untouched
@@ -194,6 +240,23 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             return  # no generation yet, no charge
 
         if result["classification"] == "ADJUST":
+            if result.get("ready_to_generate"):
+                # The adjustment reply itself already gave everything
+                # needed -- don't make them confirm a proposal that just
+                # restates what they already said. Same "don't re-ask
+                # something already answered" principle as
+                # app/engine/carousel.py's negotiation shortcut.
+                with get_session() as db:
+                    convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+                    convo.pending_proposal = None
+                if last_generation_id:
+                    await learning.record_accepted_direction(business_id, last_generation_id)
+                await _run_generation(
+                    business_id, phone, ctx, result["concept_brief"], msg.text, last_generation_id,
+                    is_revision=False, trigger_source="adjust_ready", reference_image=await _resolve_reference_bytes(),
+                )
+                return
+
             current_adjust_count = pending.get("adjust_count", 0)
             new_adjust_count = current_adjust_count + 1
 
@@ -208,13 +271,17 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
                 if last_generation_id:
                     await learning.record_accepted_direction(business_id, last_generation_id)
                 await send_text(phone, "Let's create this now — you can adjust anything directly on the image after 🎨")
-                await _run_generation(business_id, phone, ctx, result["concept_brief"], msg.text, last_generation_id, is_revision=False, trigger_source="adjust_cap")
+                await _run_generation(
+                    business_id, phone, ctx, result["concept_brief"], msg.text, last_generation_id,
+                    is_revision=False, trigger_source="adjust_cap", reference_image=await _resolve_reference_bytes(),
+                )
                 return
 
             new_pending = {
                 "proposal_text": result["proposal_text"],
                 "concept_brief": result["concept_brief"],
                 "adjust_count": new_adjust_count,
+                "reference_image_url": reference_image_url,
             }
             with get_session() as db:
                 convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
@@ -232,7 +299,10 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             # the prior generation first — treat it as accepted (subject to
             # the quality gate inside record_accepted_direction).
             await learning.record_accepted_direction(business_id, last_generation_id)
-        await _run_generation(business_id, phone, ctx, brief, msg.text, last_generation_id, is_revision=False, trigger_source="proposal_confirmed")
+        await _run_generation(
+            business_id, phone, ctx, brief, msg.text, last_generation_id,
+            is_revision=False, trigger_source="proposal_confirmed", reference_image=await _resolve_reference_bytes(),
+        )
         return
 
     # --- Branch 2: no pending proposal — classify intent as before ---
@@ -251,6 +321,23 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
         return
 
     is_revision = user_intent == "REVISE" and last_generation_id is not None
+
+    if is_revision and last_generation_is_carousel:
+        # Carousels can't be revised yet -- the single-image revision
+        # pipeline reads parent.built_prompt/base_image_url, neither of
+        # which are shaped for a multi-slide parent (see
+        # generate_carousel()'s docstring). Previously this wasn't even
+        # detected: last_generation_id never pointed at a carousel at all
+        # (it was left untouched), so a "make it more premium" right after
+        # a carousel either silently targeted an unrelated older
+        # generation or, if there wasn't one, fell through to a fresh
+        # GENERATE. Explaining this clearly beats either of those.
+        await send_text(
+            phone,
+            "I can't edit a carousel directly yet 🙏 Describe what you'd like changed and "
+            "I'll put together a new one, or ask for a fresh single post instead.",
+        )
+        return
 
     if is_revision:
         # Classify the revision first: a pure "move my logo" request is served
@@ -282,7 +369,22 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     decision = await concept_proposal.decide(ctx, brief)
 
     if decision["decision"] == "NEEDS_PROPOSAL":
-        pending = {"proposal_text": decision["proposal_text"], "concept_brief": decision["concept_brief"], "adjust_count": 0}
+        # Persist any attached photo now (R2, not just the WhatsApp
+        # media_id) so it survives the negotiation ahead instead of being
+        # silently dropped -- see Branch 1 above, which resolves this same
+        # field on every subsequent turn. See the Aug 2026 "uploaded
+        # reference images are being ignored" investigation.
+        reference_image_url = None
+        if reference_image is not None:
+            try:
+                reference_image_url = await asyncio.to_thread(upload_reference_image, business_id, reference_image)
+            except Exception:
+                logger.exception("Failed to persist reference photo starting a proposal negotiation for business=%s", business_id)
+
+        pending = {
+            "proposal_text": decision["proposal_text"], "concept_brief": decision["concept_brief"],
+            "adjust_count": 0, "reference_image_url": reference_image_url,
+        }
         with get_session() as db:
             convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
             convo.pending_proposal = json.dumps(pending)
@@ -302,57 +404,78 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     await _run_generation(business_id, phone, ctx, msg.text, msg.text, last_generation_id, is_revision=False, trigger_source="specific_enough", reference_image=reference_image)
 
 
-async def generate_carousel(business_id: uuid.UUID, msg: IncomingMessage):
+async def generate_carousel(
+    business_id: uuid.UUID, phone: str, ctx: BusinessContext,
+    slide_briefs: list[str], user_message: str, last_generation_id: uuid.UUID | None = None,
+    reference_image_url: str | None = None,
+):
     """
-    A carousel post: CAROUSEL_SLIDE_COUNT related images posted together as
-    one native Instagram carousel (see app/instagram.py's
-    content_type="carousel" branch -- the Make.com scenario already
-    supported this before this function existed; nothing on the app side
-    ever produced a carousel-shaped request for it. See the Aug 2026
-    "carousel not generating" investigation).
+    Generates len(slide_briefs) genuinely SEPARATE images, one per brief,
+    in parallel, and posts them together as a native Instagram carousel
+    (see app/instagram.py's content_type="carousel" branch -- the Make.com
+    scenario already supported this; nothing on the app side ever produced
+    a request shaped for it before, and the prior version of this function
+    generated a fixed 3 slides with no per-slide content, which is what
+    this replaces). If exactly one brief is given, delivers/posts as a
+    normal single photo instead -- Instagram's carousel API requires at
+    least 2 media items, see app/engine/carousel.py where "1" is offered
+    as a valid choice anyway (routes here the same way, just posts as a
+    photo).
 
-    Deliberately a separate, simpler pipeline from _run_generation():
-    keyword-triggered ("carousel" in the message, see app/router.py) and
-    generates immediately -- no concept-proposal negotiation, no revision
-    handling, no quality-gated regen budget. Charges CAROUSEL_CREDIT_COST
-    up front as one Generation row; router.py checks the balance before
-    calling this.
+    Called only after app/engine/carousel.py's negotiation (how many
+    slides, what each one should show) has completed -- this function
+    itself does no asking, just generates from what it's given. Charges
+    CAROUSEL_CREDIT_PER_SLIDE credits per slide; app/engine/carousel.py
+    checks the balance before calling this.
 
-    Deliberately does NOT update ConversationState.last_generation_id --
-    the single-image revision pipeline (parent.built_prompt,
-    parent.base_image_url) isn't shaped for a multi-slide parent, so a
-    follow-up "make it more premium" should keep targeting the last
-    single-image generation, not this carousel.
+    Each slide goes through the same quality gate as a single-image
+    generation (2 candidates, Claude vision scoring, one regen attempt if
+    below threshold) -- an earlier version generated exactly 1 candidate
+    per slide with no scoring at all. Unlike the single-image pipeline,
+    though, an exhausted regen budget does NOT block delivery here: with N
+    independent slides, hard-blocking the whole carousel over one weak
+    slide would throw away the cost already spent on the other, good
+    slides -- see _build_one_slide()'s comment below.
+
+    reference_image_url: an uploaded photo (already persisted to R2 by
+    app/engine/carousel.py, since WhatsApp media IDs aren't guaranteed to
+    stay resolvable across a multi-turn negotiation) to use as the actual
+    subject for EVERY slide via the image-edit endpoint, if the client
+    attached one -- fetched once here and reused across all slides, so
+    "make a carousel of this product" genuinely features that product
+    throughout instead of generating unrelated new images that merely
+    match the text description.
+
+    last_generation_id: whatever was last generated before this carousel
+    (if anything) -- used only for the same "moving on = tacit acceptance"
+    learning signal generate() already applies on its own SPECIFIC_ENOUGH
+    path (previously missing here entirely). This carousel's own
+    Generation.id becomes the new ConversationState.last_generation_id
+    once it completes, same as any other generation -- app/engine/orchestrator.py's
+    generate() checks Generation.carousel_image_urls before attempting a
+    REVISE against it and explains that carousels aren't revisable yet,
+    rather than either silently misapplying a revision to some earlier
+    generation or corrupting a carousel's own row.
     """
-    if not msg.text:
-        await send_text(msg.sender, "Please describe what you'd like the carousel to be about 🙂")
-        return
+    slide_count = len(slide_briefs)
+    credit_cost = slide_count * CAROUSEL_CREDIT_PER_SLIDE
 
-    phone = msg.sender
+    reference_bytes = None
+    if reference_image_url:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as http_client:
+                ref_resp = await http_client.get(reference_image_url)
+            if ref_resp.status_code == 200:
+                reference_bytes = ref_resp.content
+            else:
+                logger.warning(
+                    "Fetching carousel reference image returned %s — generating from text alone",
+                    ref_resp.status_code,
+                )
+        except Exception:
+            logger.exception("Failed to fetch carousel reference image — generating from text alone")
 
     with get_session() as db:
-        business = db.query(Business).filter(Business.id == business_id).first()
-        profile = db.query(BrandProfile).filter(BrandProfile.business_id == business_id).first()
-
-        ctx = BusinessContext(
-            name=business.name,
-            industry=business.industry,
-            tone=profile.tone if profile else None,
-            primary_color=profile.primary_color if profile else None,
-            secondary_color=profile.secondary_color if profile else None,
-            target_audience=profile.target_audience if profile else None,
-            website=profile.website if profile else None,
-            contact_phone=profile.contact_phone if profile else None,
-            logo_url=profile.logo_url if profile else None,
-            learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
-            style_summary=(profile.extras or {}).get("style_summary") if profile else None,
-            language=business.preferred_language or "en",
-            industry_style=industry_research.get_cached_style(business.industry),
-            instagram_handle=business.instagram_handle,
-            instagram_bio=profile.instagram_bio if profile else None,
-            instagram_recent_captions=profile.instagram_recent_captions if profile else None,
-        )
-
         within_limit = _check_rate_limit(db, business_id)
 
     if not within_limit:
@@ -363,40 +486,74 @@ async def generate_carousel(business_id: uuid.UUID, msg: IncomingMessage):
         )
         return
 
-    await send_text(phone, f"🎠 Creating your {CAROUSEL_SLIDE_COUNT}-slide carousel... (~a minute)")
+    if last_generation_id:
+        await learning.record_accepted_direction(business_id, last_generation_id)
+
+    await send_text(
+        phone,
+        f"🎠 Creating your {slide_count}-slide carousel... (~a minute)"
+        if slide_count > 1 else "🎨 Creating your design... (~30 seconds)",
+    )
+
+    async def _build_one_slide(slide_num: int, slide_brief: str) -> bytes:
+        built = await prompt_builder.build(
+            ctx,
+            (
+                f"This is slide {slide_num} of {slide_count} in an Instagram carousel post -- "
+                f"this specific slide's subject/content is: {slide_brief}. "
+                f"Keep a consistent visual style and color palette with the rest of the "
+                f"carousel, but this slide shows ONLY: {slide_brief}."
+                if slide_count > 1 else slide_brief
+            ),
+        )
+        image_prompt = built["image_prompt"]
+
+        candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_bytes)
+        if not candidates:
+            raise RuntimeError(f"No image returned for carousel slide {slide_num}")
+
+        scored = await quality.score_and_pick(candidates)
+        if scored["best_score"] < REGEN_THRESHOLD and regen_within_budget(business_id):
+            # One regen attempt, same bound as the single-image pipeline.
+            # If the budget's exhausted, deliver the best candidate we
+            # have rather than blocking (see the docstring above) --
+            # different from the single-image pipeline, which blocks
+            # delivery entirely in that case.
+            record_regen_used(business_id)
+            retry_candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_bytes)
+            if retry_candidates:
+                retry_scored = await quality.score_and_pick(retry_candidates)
+                if retry_scored["best_score"] > scored["best_score"]:
+                    candidates = retry_candidates
+                    scored = retry_scored
+
+        slide_image = candidates[scored["best_index"]]
+        if ctx.has_logo:
+            async with httpx.AsyncClient(timeout=15.0) as http_client:
+                logo_resp = await http_client.get(ctx.logo_url)
+                if logo_resp.status_code == 200:
+                    slide_image = compositor.composite_logo(slide_image, logo_resp.content)
+
+        return slide_image
 
     try:
-        slide_images = []
-        for slide_num in range(1, CAROUSEL_SLIDE_COUNT + 1):
-            built = await prompt_builder.build(
-                ctx,
-                f"Slide {slide_num} of {CAROUSEL_SLIDE_COUNT} in an Instagram carousel post. "
-                f"Overall carousel theme/request: {msg.text}. Keep a consistent visual style and "
-                f"color palette across all {CAROUSEL_SLIDE_COUNT} slides, but vary the composition "
-                f"and focus for this specific slide so the carousel doesn't feel repetitive.",
-            )
-            candidates = await image_gen.generate_images(built["image_prompt"], count=1)
-            if not candidates:
-                raise RuntimeError(f"No image returned for carousel slide {slide_num}")
+        # Every slide is independent -- built concurrently instead of one
+        # at a time, so an 8-slide carousel doesn't take 8x as long as a
+        # single image (this business's message lock is held for the
+        # whole duration either way, see app/router.py).
+        slide_images = list(await asyncio.gather(*[
+            _build_one_slide(i, brief) for i, brief in enumerate(slide_briefs, start=1)
+        ]))
 
-            slide_image = candidates[0]
-            if ctx.has_logo:
-                async with httpx.AsyncClient(timeout=15.0) as http_client:
-                    logo_resp = await http_client.get(ctx.logo_url)
-                    if logo_resp.status_code == 200:
-                        slide_image = compositor.composite_logo(slide_image, logo_resp.content)
-
-            slide_images.append(slide_image)
-
-        cap = await caption_engine.generate(ctx, msg.text)
+        cap = await caption_engine.generate(ctx, user_message)
 
         with get_session() as db:
             gen_row = Generation(
                 business_id=business_id,
-                user_message=msg.text,
-                built_prompt=f"[carousel, {CAROUSEL_SLIDE_COUNT} slides] {msg.text}",
+                user_message=user_message,
+                built_prompt=f"[carousel, {slide_count} slides: {' | '.join(slide_briefs)}]",
                 status="generating",
-                credits_charged=CAROUSEL_CREDIT_COST,
+                credits_charged=credit_cost,
                 trigger_source="carousel",
             )
             db.add(gen_row)
@@ -415,12 +572,19 @@ async def generate_carousel(business_id: uuid.UUID, msg: IncomingMessage):
         with get_session() as db:
             gen_row = db.query(Generation).filter(Generation.id == generation_id).first()
             gen_row.image_url = image_urls[0]  # first slide doubles as the WhatsApp preview thumbnail
-            gen_row.carousel_image_urls = image_urls
+            # Instagram's carousel API needs >=2 media items -- a single
+            # slide posts as a plain photo instead (see app/instagram.py's
+            # branch, keyed off this being None vs populated).
+            gen_row.carousel_image_urls = image_urls if slide_count >= 2 else None
             gen_row.caption = cap["caption"]
             gen_row.hashtags = cap["hashtags"]
             gen_row.status = "done"
 
-        charge_for_generation(business_id, generation_id, amount=CAROUSEL_CREDIT_COST)
+            convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+            if convo:
+                convo.last_generation_id = generation_id
+
+        charge_for_generation(business_id, generation_id, amount=credit_cost)
 
         balance = get_balance(business_id)
         low_balance_note = (
@@ -430,7 +594,9 @@ async def generate_carousel(business_id: uuid.UUID, msg: IncomingMessage):
 
         # All but the last slide as plain images; the last one carries the
         # "Post to Instagram" button + caption, same delivery shape as a
-        # single creative (see _deliver_creative).
+        # single creative (see _deliver_creative) -- for a 1-slide
+        # "carousel" this loop is empty and only the single button-image
+        # send below runs, identical to a normal single-image delivery.
         for url in image_urls[:-1]:
             await send_image(phone, url)
 
@@ -448,8 +614,8 @@ async def generate_carousel(business_id: uuid.UUID, msg: IncomingMessage):
 
         await send_text(
             phone,
-            f"✨ Here's your {CAROUSEL_SLIDE_COUNT}-slide carousel!\n\n"
-            f"💳 Credits left: {balance}{low_balance_note}",
+            (f"✨ Here's your {slide_count}-slide carousel!\n\n" if slide_count > 1 else "✨ Here's your creative!\n\n")
+            + f"💳 Credits left: {balance}{low_balance_note}",
         )
 
     except Exception:

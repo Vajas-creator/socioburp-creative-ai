@@ -278,6 +278,7 @@ async def run():
         biz2_id = biz2.id
 
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="hi"))
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # owner-name question
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="I run a bakery"))
     result = await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="@mytestbakery"))
     await asyncio.sleep(0.05)  # let the fire-and-forget task actually run
