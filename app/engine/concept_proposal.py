@@ -122,20 +122,35 @@ ADJUST - they're giving feedback, asking for a change, or expressing a
 preference different from what was proposed, however minor.
 
 If ADJUST, also write a revised proposal (same style as before: 2-4 sentences,
-as Sakshi, ending with a check-in question) that incorporates their feedback.
+as Sakshi, ending with a check-in question) that incorporates their feedback,
+AND decide ready_to_generate: true if their reply itself already gives
+everything needed to produce the creative right now (occasion/theme, and
+either an offer detail or a clear visual direction -- the same bar as
+"specific enough" for a fresh request) -- false if there's still a real
+creative decision left open. When true, don't make them confirm a proposal
+that just restates what they already said -- proposal_text is still
+required (used as the internal record of the agreed direction) but won't
+be shown to them as another question to answer.
 
 Reply with JSON only, no other text:
 {{"classification": "CONFIRM"}}
 or
-{{"classification": "ADJUST", "proposal_text": "...", "concept_brief": "..."}}"""
+{{"classification": "ADJUST", "proposal_text": "...", "concept_brief": "...", "ready_to_generate": true|false}}"""
 
 
 async def interpret_reply(ctx: BusinessContext, previous_proposal: str, client_reply: str) -> dict:
     """
     Returns one of:
       {"classification": "CONFIRM"}
-      {"classification": "ADJUST", "proposal_text": str, "concept_brief": str}
+      {"classification": "ADJUST", "proposal_text": str, "concept_brief": str, "ready_to_generate": bool}
       {"classification": "RETRY"}  -- only on failure; see except block below
+
+    ready_to_generate (ADJUST only): true when the client's adjustment
+    reply already gave enough to generate immediately -- the caller
+    (orchestrator.generate()) skips re-sending proposal_text as another
+    question and generates right away instead, the same "don't re-ask
+    something already answered" principle app/engine/carousel.py applies
+    to its own negotiation. False keeps the normal propose-then-wait loop.
     """
     user_content = (
         f"Business profile:\n{_summarize_context(ctx)}\n\n"

@@ -230,6 +230,23 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             return  # no generation yet, no charge
 
         if result["classification"] == "ADJUST":
+            if result.get("ready_to_generate"):
+                # The adjustment reply itself already gave everything
+                # needed -- don't make them confirm a proposal that just
+                # restates what they already said. Same "don't re-ask
+                # something already answered" principle as
+                # app/engine/carousel.py's negotiation shortcut.
+                with get_session() as db:
+                    convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
+                    convo.pending_proposal = None
+                if last_generation_id:
+                    await learning.record_accepted_direction(business_id, last_generation_id)
+                await _run_generation(
+                    business_id, phone, ctx, result["concept_brief"], msg.text, last_generation_id,
+                    is_revision=False, trigger_source="adjust_ready", reference_image=await _resolve_reference_bytes(),
+                )
+                return
+
             current_adjust_count = pending.get("adjust_count", 0)
             new_adjust_count = current_adjust_count + 1
 

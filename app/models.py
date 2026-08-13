@@ -87,10 +87,14 @@ class Generation(Base):
     status = Column(String(20), default="pending")  # pending -> generating -> done -> failed -> blocked (budget cap hit)
     posted_to_instagram = Column(Boolean, nullable=False, default=False)
     # How this generation got triggered: 'specific_enough' | 'proposal_confirmed' |
-    # 'adjust_cap' | 'revision' | 'logo_free_revision' | 'onboarding_complete'
-    # (auto-triggered the moment onboarding finishes, bypassing the concept-
-    # proposal gate -- see app/onboarding.py). Nullable for rows created
-    # before this column existed. Also 'carousel', see below.
+    # 'adjust_ready' (the client's ADJUST reply was already specific enough
+    # to skip re-proposing and waiting for a separate confirm -- see
+    # concept_proposal.interpret_reply()'s ready_to_generate) | 'adjust_cap' |
+    # 'revision' | 'logo_free_revision' | 'onboarding_complete' (auto-triggered
+    # the moment onboarding finishes, bypassing the concept-proposal gate --
+    # see app/onboarding.py) | 'image_intent' | 'image_intent_as_is'
+    # (see app/engine/image_intent.py) | 'carousel' (see below). Nullable
+    # for rows created before this column existed.
     trigger_source = Column(String(30), nullable=True)
     # Set only for a carousel post (trigger_source='carousel') -- ordered
     # list of each slide's R2 URL. image_url above still holds the FIRST
