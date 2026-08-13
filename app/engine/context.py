@@ -26,7 +26,9 @@ class BusinessContext:
     style_summary: str | None = None  # distilled synthesis once learned_preferences has cycled a few times
     language: str = "en"  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml' — see app/i18n.py
     industry_style: str | None = None  # cached industry-wide trend research, see app/engine/industry_research.py
-    instagram_handle: str | None = None  # whatever the client sent when asked for their Instagram page — a handle/link only, NOT actual page content (nothing fetches or reads it)
+    instagram_handle: str | None = None  # whatever the client typed when asked for their Instagram page
+    instagram_bio: str | None = None  # fetched via Make's Business Discovery API, see app/engine/instagram_analysis.py -- None until the background fetch completes (or if it fails/isn't a public Business account)
+    instagram_recent_captions: str | None = None  # newline-joined recent post captions, same source
 
     @property
     def has_logo(self) -> bool:

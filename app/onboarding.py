@@ -64,6 +64,20 @@ WELCOME_TO_QUESTION_DELAY_SECONDS = 1.5
 
 
 async def advance(business_id: uuid.UUID, msg: IncomingMessage):
+    """
+    Returns None in the normal case. When onboarding just completed,
+    returns (ctx, brief) instead -- the caller (app/router.py) must pass
+    that to orchestrator._run_generation() itself, AFTER this function has
+    returned. Deliberately not run from in here: the whole generation
+    pipeline (several Claude calls, image gen, R2 uploads, its own several
+    DB sessions) is slow, and calling it from inside this function's own
+    `with get_session()` block would mean that session/connection stays
+    checked out, idle, for the pipeline's entire duration, while the
+    pipeline itself needs to check out MORE connections from the same
+    pool for its own work -- a real contention/hang risk under any real
+    concurrent load. See the Aug 2026 "bot goes silent after 'give me a
+    moment'" incident.
+    """
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == business_id).first()
         state = biz.onboarding_state
@@ -105,7 +119,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
 
             welcome = await i18n.t(
                 "welcome", language,
-                "Hi, I'm Maya. 👋\n"
+                "Hi, I'm Sakshi. 👋\n"
                 "I'll help keep your business visible online — without you having to "
                 "figure out things on your own daily.\n"
                 "First, I'm going to learn a little about your business and how you "
@@ -181,6 +195,19 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                     logger.exception("Instagram screenshot processing failed for business=%s", business_id)
             elif text_lower not in INSTAGRAM_SKIP_WORDS and msg.text and msg.text.strip():
                 biz.instagram_handle = msg.text.strip()
+                # Fire-and-forget, same pattern as industry_research below --
+                # fetches the actual bio + recent captions in the background
+                # via Make's Business Discovery scenario and writes them onto
+                # BrandProfile once done. Never awaited here: this must not
+                # add latency to the "give me a moment" -> first generation
+                # path below. The first-ever generation won't have this yet
+                # (same as industry research on a cache miss) -- it's there
+                # for every generation after that. See
+                # app/engine/instagram_analysis.py.
+                from app.engine import instagram_analysis
+                asyncio.create_task(
+                    instagram_analysis.fetch_and_store_profile_summary(business_id, biz.instagram_handle)
+                )
             # A skip/decline or empty reply: proceed anyway -- unlike the
             # business-description question, this one never blocks
             # onboarding completion.
@@ -213,6 +240,8 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                 language=language,
                 industry_style=industry_research.get_cached_style(biz.industry),
                 instagram_handle=biz.instagram_handle,
+                instagram_bio=profile.instagram_bio,
+                instagram_recent_captions=profile.instagram_recent_captions,
             )
 
             # Commit now, not just at the end of this `with` block -- the
@@ -225,24 +254,19 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             from app import analytics
             analytics.log_event(business_id, "onboarding_completed", industry=biz.industry)
 
-            # Call _run_generation() directly rather than the normal
-            # generate() entry point -- generate() would run this brief
-            # through the concept-proposal gate, which could decide it
-            # needs more detail and ask ANOTHER question instead of
-            # generating. Maya just said "Give me a moment" -- that's a
-            # promise of immediate action, not another question, so this
-            # bypasses the gate the same way the ADJUST-round-cap escape
-            # hatch in orchestrator.generate() already does. last_generation_id
-            # is genuinely None here (this business's first-ever
-            # generation), which is also what makes reflect_first_result()
-            # fire automatically inside _run_generation().
-            from app.engine.orchestrator import _run_generation
-            await _run_generation(
-                business_id, phone, ctx, brief, brief,
-                last_generation_id=None, is_revision=False,
-                trigger_source="onboarding_complete",
-            )
-            return
+            # Signal to the caller (app/router.py) to call
+            # orchestrator._run_generation() directly, bypassing the
+            # normal generate() entry point's concept-proposal gate --
+            # generate() could decide it needs more detail and ask ANOTHER
+            # question instead of generating, and Sakshi just said "Give me
+            # a moment", a promise of immediate action. Same bypass the
+            # ADJUST-round-cap escape hatch in orchestrator.generate()
+            # already uses. last_generation_id is genuinely None here
+            # (this business's first-ever generation), which is also what
+            # makes reflect_first_result() fire automatically inside
+            # _run_generation(). NOT called from here -- see this
+            # function's own docstring for why.
+            return ctx, brief
 
         logger.warning("Unknown onboarding state '%s' for business=%s", state, business_id)
         biz.onboarding_state = "new"

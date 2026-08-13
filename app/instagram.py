@@ -47,6 +47,7 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
         gen_found = gen is not None
         already_posted = gen.posted_to_instagram if gen else None
         image_url = gen.image_url if gen else None
+        carousel_image_urls = gen.carousel_image_urls if gen else None
         caption = gen.caption if gen else None
         hashtags = gen.hashtags if gen else None
         instagram_account_id = business.instagram_account_id if business else None
@@ -74,16 +75,32 @@ async def handle_post_request(business_id: uuid.UUID, phone: str, generation_id:
 
     full_caption = f"{caption}\n\n{hashtags}" if caption else ""
 
+    # A carousel generation (Generation.carousel_image_urls set, see
+    # app/engine/orchestrator.py's generate_carousel()) posts through the
+    # scenario's "Carousel" branch instead of "Photo" -- content_type and
+    # payload shape must match what that branch's CreateCarouselPhoto
+    # module expects: files as [{"media_type": "IMAGE", "image_url": ...}],
+    # 2-10 items.
+    if carousel_image_urls:
+        payload = {
+            "account_id": instagram_account_id,
+            "content_type": "carousel",
+            "files": [{"media_type": "IMAGE", "image_url": u} for u in carousel_image_urls],
+            "caption": full_caption[:2200],
+        }
+    else:
+        payload = {
+            "account_id": instagram_account_id,
+            "content_type": "photo",
+            "image_url": image_url,
+            "caption": full_caption[:2200],  # Instagram caption limit
+        }
+
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(
                 settings.MAKE_INSTAGRAM_WEBHOOK_URL,
-                json={
-                    "account_id": instagram_account_id,
-                    "content_type": "photo",
-                    "image_url": image_url,
-                    "caption": full_caption[:2200],  # Instagram caption limit
-                },
+                json=payload,
             )
         # Log the full response on EVERY call, not just failures. A Make.com
         # webhook trigger acks (2xx) the moment it receives the request,

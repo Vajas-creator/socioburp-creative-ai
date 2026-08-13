@@ -20,7 +20,7 @@ Covers:
     pending_first_request is used as the auto-generation brief -- the
     client never has to repeat themselves.
   - Once onboarding completes with NO pending_first_request, the
-    auto-generation still fires (Maya said "Give me a moment" -- that's a
+    auto-generation still fires (Sakshi said "Give me a moment" -- that's a
     promise of action), just with a generic fallback brief instead.
 """
 import sys
@@ -137,14 +137,27 @@ def _make_business(phone):
 
 
 async def _complete_rest_of_onboarding(biz_id, phone):
-    """Drives business-description -> Instagram (skipped), the full remaining flow."""
+    """
+    Drives business-description -> Instagram (skipped), the full remaining
+    flow. advance() itself no longer calls _run_generation() when
+    onboarding completes -- it returns (ctx, brief) instead, and the
+    caller (app/router.py in production) is responsible for invoking
+    _run_generation(). Simulate that hand-off here, same as production.
+    """
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small bakery"))
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    if result is not None:
+        ctx, brief = result
+        await orchestrator._run_generation(
+            biz_id, phone, ctx, brief, brief,
+            last_generation_id=None, is_revision=False,
+            trigger_source="onboarding_complete",
+        )
 
 
 async def run():
     print("=" * 60)
-    print("TEST 1: plain greeting -> standard Maya welcome, no pending_first_request")
+    print("TEST 1: plain greeting -> standard Sakshi welcome, no pending_first_request")
     print("=" * 60)
     sent.clear()
     phone = "919999999910"
@@ -158,7 +171,7 @@ async def run():
         assert biz.onboarding_state == "awaiting_business_description"
 
     welcome_text = sent[0][1]
-    assert welcome_text.startswith("Hi, I'm Maya."), f"FAIL: expected the standard Maya welcome, got {welcome_text!r}"
+    assert welcome_text.startswith("Hi, I'm Sakshi."), f"FAIL: expected the standard Sakshi welcome, got {welcome_text!r}"
     assert sent[1][1] == "Let's start simple. What does your business do?", f"FAIL: expected the staged second message, got {sent[1]!r}"
     print(f"PASS: greeting got the standard welcome + staged question, nothing stored: {[s[1] for s in sent]}\n")
 
@@ -180,7 +193,7 @@ async def run():
         assert biz.onboarding_state == "awaiting_business_description", "FAIL: question sequence should be unchanged (still asks about the business first)"
 
     welcome_text = sent[0][1]
-    assert welcome_text.startswith("Hi, I'm Maya."), f"FAIL: expected the same standard welcome, got {welcome_text!r}"
+    assert welcome_text.startswith("Hi, I'm Sakshi."), f"FAIL: expected the same standard welcome, got {welcome_text!r}"
     print(f"PASS: specific request got the same welcome, but was stored: welcome={welcome_text!r}\n")
 
     print("=" * 60)

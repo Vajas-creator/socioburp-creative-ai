@@ -209,14 +209,26 @@ async def part2_onboarding_wiring():
     print(f"PASS: reflection sent first ({sent[0]!r}), Instagram question next ({sent[1]!r}), fields stored\n")
 
     print("=" * 60)
-    print("TEST 5b: completing the Instagram step auto-generates (bypassing generate()'s proposal gate)")
+    print("TEST 5b: completing the Instagram step returns (ctx, brief) for the caller to auto-generate (bypassing generate()'s proposal gate)")
     print("=" * 60)
     generation_calls.clear()
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     with get_session() as db:
         assert db.query(Business).filter(Business.id == biz_id).first().onboarding_state == "done"
+    assert result is not None, "FAIL: expected advance() to return (ctx, brief) when onboarding completes"
+    ctx, brief = result
+    assert ctx.industry == "restaurant", f"FAIL: expected returned ctx to carry the extracted industry, got {ctx.industry!r}"
+
+    # Simulate what app/router.py does with this return value -- advance()
+    # itself no longer calls _run_generation() (see its docstring), the
+    # caller does, after advance()'s own DB session has closed.
+    await orch._run_generation(
+        biz_id, phone, ctx, brief, brief,
+        last_generation_id=None, is_revision=False,
+        trigger_source="onboarding_complete",
+    )
     assert generation_calls == ["onboarding_complete"], f"FAIL: expected _run_generation() called directly with trigger_source='onboarding_complete', got {generation_calls}"
-    print("PASS: onboarding completion called _run_generation() directly, skipping the proposal gate\n")
+    print("PASS: onboarding completion returned (ctx, brief); caller invoked _run_generation() directly, skipping the proposal gate\n")
 
     orch._run_generation = real_run_generation  # part3 needs the real function
 

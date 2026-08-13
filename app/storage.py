@@ -70,3 +70,9 @@ def upload_base_image(business_id: uuid.UUID, generation_id: uuid.UUID, image_by
     """
     key = f"creatives/{business_id}/{generation_id}_base.png"
     return _upload(key, image_bytes, "image/png")
+
+
+def upload_carousel_slide(business_id: uuid.UUID, generation_id: uuid.UUID, slide_num: int, image_bytes: bytes) -> str:
+    """One slide (1-indexed) of a carousel generation -- see Generation.carousel_image_urls."""
+    key = f"creatives/{business_id}/{generation_id}_slide{slide_num}.png"
+    return _upload(key, image_bytes, "image/png")

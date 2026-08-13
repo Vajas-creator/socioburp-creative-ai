@@ -4,14 +4,15 @@ BARE_GREETINGS + the check in _process_message()).
 
 Previously a bare "hi" from an already-onboarded client fell all the way
 through to orchestrator.generate() -> intent classification -> the
-generic OTHER-intent fallback ("I'm Maya, your creative partner here! Try
+generic OTHER-intent fallback ("I'm Sakshi, your creative partner here! Try
 something like..."). Now it's intercepted early with a short, direct
 prompt, without ever reaching intent classification or (for a genuinely
 new business) re-running onboarding.
 
 Covers:
   - A returning user (onboarding_state == "done") sending "hi"/"hey"/
-    "hello" (any case/whitespace) gets the short prompt directly --
+    "hello" (any case/whitespace, and with trailing punctuation like
+    "Hello!" or "hey??") gets the short prompt directly --
     onboarding.advance() is NOT called, orchestrator.generate() is NOT
     called.
   - A genuinely new business (onboarding_state != "done") sending "hi"
@@ -95,7 +96,7 @@ async def run():
     print("=" * 60)
     print("TEST 1: returning user sends a bare greeting -> short prompt, no onboarding, no generate()")
     print("=" * 60)
-    for i, greeting in enumerate(["hi", "Hi", "HELLO", " hey  ", "hii"]):
+    for i, greeting in enumerate(["hi", "Hi", "HELLO", " hey  ", "hii", "Hello!", "hi.", "hey??", "Hola~"]):
         sent.clear()
         onboarding_calls.clear()
         generate_calls.clear()

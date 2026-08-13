@@ -44,6 +44,11 @@ class Settings:
     # --- Instagram auto-posting (via Make.com scenario) ---
     MAKE_INSTAGRAM_WEBHOOK_URL: str = os.environ.get("MAKE_INSTAGRAM_WEBHOOK_URL", "")
 
+    # --- Instagram profile/content fetch (via a separate Make.com scenario,
+    # "SocioBurp — Instagram Profile Fetch" -- Business Discovery API using
+    # SocioBurp's own connected IG account, no per-client OAuth needed) ---
+    MAKE_INSTAGRAM_PROFILE_FETCH_WEBHOOK_URL: str = os.environ.get("MAKE_INSTAGRAM_PROFILE_FETCH_WEBHOOK_URL", "")
+
     # --- Alerts (optional but recommended) ---
     ALERT_TELEGRAM_TOKEN: str = os.environ.get("ALERT_TELEGRAM_TOKEN", "")
     ALERT_TELEGRAM_CHAT_ID: str = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")

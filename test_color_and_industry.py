@@ -198,9 +198,19 @@ async def part_c():
 
     sent.clear()
     generation_calls.clear()
-    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="image", media_id="fake_media_123"))
+    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="image", media_id="fake_media_123"))
     assert state() == "done", f"FAIL: {state()}"
     assert colors() == ("#1A1A2E", "#EAB308"), f"FAIL: expected extracted colors applied directly (no confirm step), got {colors()}"
+    assert result is not None, "FAIL: expected advance() to return (ctx, brief) once onboarding completes"
+    ctx, brief = result
+    # advance() no longer calls _run_generation() itself (see its
+    # docstring) -- simulate what app/router.py does with the returned
+    # (ctx, brief), same as production.
+    await orch._run_generation(
+        biz_id, phone, ctx, brief, brief,
+        last_generation_id=None, is_revision=False,
+        trigger_source="onboarding_complete",
+    )
     assert len(generation_calls) == 1, f"FAIL: expected auto-generation triggered once onboarding completes, got {generation_calls}"
     assert generation_calls[0][1] == "onboarding_complete", f"FAIL: expected trigger_source='onboarding_complete', got {generation_calls[0]}"
     assert generation_calls[0][2] == "#1A1A2E", "FAIL: the auto-generation's context should carry the just-extracted colors"
@@ -216,7 +226,7 @@ async def part_c():
         db.add(BrandProfile(business_id=biz2_id))
 
     generation_calls.clear()
-    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="instagram.com/testrestaurant"))
+    result2 = await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="instagram.com/testrestaurant"))
     with get_session() as db:
         biz2_row = db.query(Business).filter(Business.id == biz2_id).first()
         profile2 = db.query(BrandProfile).filter(BrandProfile.business_id == biz2_id).first()
@@ -224,6 +234,13 @@ async def part_c():
         assert biz2_row.instagram_handle == "instagram.com/testrestaurant", f"FAIL: handle not stored, got {biz2_row.instagram_handle}"
         assert profile2.primary_color is None, "FAIL: no screenshot was sent, no colors should have been extracted"
         stored_handle = biz2_row.instagram_handle
+    assert result2 is not None, "FAIL: expected advance() to return (ctx, brief) once onboarding completes"
+    ctx2, brief2 = result2
+    await orch._run_generation(
+        biz2_id, phone2, ctx2, brief2, brief2,
+        last_generation_id=None, is_revision=False,
+        trigger_source="onboarding_complete",
+    )
     assert len(generation_calls) == 1, f"FAIL: expected auto-generation triggered here too, got {generation_calls}"
     print(f"PASS: text handle stored ({stored_handle!r}), no color extraction attempted, still auto-generated\n")
 

@@ -58,6 +58,15 @@ class BrandProfile(Base):
     address = Column(Text)
     extras = Column(JSONB, default=dict)  # products, offers, anything else
 
+    # Fetched via the "SocioBurp — Instagram Profile Fetch" Make.com scenario
+    # (Business Discovery API, using SocioBurp's own connected IG account —
+    # no OAuth needed from the client). Populated best-effort, in the
+    # background, from Business.instagram_handle -- see
+    # app/engine/instagram_analysis.py. Both stay NULL if the fetch hasn't
+    # run yet, failed, or the handle isn't a public Business/Creator account.
+    instagram_bio = Column(Text, nullable=True)
+    instagram_recent_captions = Column(Text, nullable=True)  # newline-joined, most recent first
+
     business = relationship("Business", back_populates="brand_profile")
 
 
@@ -81,8 +90,14 @@ class Generation(Base):
     # 'adjust_cap' | 'revision' | 'logo_free_revision' | 'onboarding_complete'
     # (auto-triggered the moment onboarding finishes, bypassing the concept-
     # proposal gate -- see app/onboarding.py). Nullable for rows created
-    # before this column existed. See app/engine/orchestrator.py.
+    # before this column existed. Also 'carousel', see below.
     trigger_source = Column(String(30), nullable=True)
+    # Set only for a carousel post (trigger_source='carousel') -- ordered
+    # list of each slide's R2 URL. image_url above still holds the FIRST
+    # slide (used as the WhatsApp preview thumbnail); NULL for a normal,
+    # single-image generation. See app/engine/orchestrator.py's
+    # generate_carousel() and app/instagram.py's posting branch.
+    carousel_image_urls = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     business = relationship("Business", back_populates="generations")

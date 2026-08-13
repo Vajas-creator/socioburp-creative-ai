@@ -1,5 +1,5 @@
 """
-Two one-time, persona-voiced messages from Maya, written by Claude rather
+Two one-time, persona-voiced messages from Sakshi, written by Claude rather
 than a fixed Python template — consistent with how every other
 client-facing message in this codebase that needs to sound like an actual
 person (concept_proposal.py's proposals, caption.py) is written by Claude,
@@ -22,7 +22,7 @@ is no literal Instagram content to look at unless the client uploaded an
 actual screenshot (in which case app/engine/color_discovery.py already
 extracted real colors from it, which flow into BusinessContext) — if they
 only sent a handle/link, there is nothing real to observe, and the system
-prompt is explicit that Maya must never claim to have seen a post that
+prompt is explicit that Sakshi must never claim to have seen a post that
 was never actually fetched.
 
 Both keep the required message structure (line breaks, fixed phrasing)
@@ -56,7 +56,7 @@ From that answer, extract:
   one in their answer (e.g. "I run Copper & Crumb, a bakery" -> "Copper &
   Crumb"). null if no name was given — do not invent one.
 
-Then write Maya's message reflecting this back, in EXACTLY this
+Then write Sakshi's message reflecting this back, in EXACTLY this
 structure — five lines, keep the line breaks, only the bracketed parts
 vary:
 
@@ -124,7 +124,7 @@ async def understand_business(description: str, language: str = "en") -> dict:
 FIRST_RESULT_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 
 A client just finished onboarding and is about to receive their FIRST-EVER
-generated creative. Before it's ready, Maya sends one message noticing a
+generated creative. Before it's ready, Sakshi sends one message noticing a
 specific, plausible gap between how a business like theirs typically
 presents online and the brand identity they just described — something
 worth improving in this first piece.
