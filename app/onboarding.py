@@ -119,7 +119,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
 
             welcome = await i18n.t(
                 "welcome", language,
-                "Hi, I'm Maya. 👋\n"
+                "Hi, I'm Sakshi. 👋\n"
                 "I'll help keep your business visible online — without you having to "
                 "figure out things on your own daily.\n"
                 "First, I'm going to learn a little about your business and how you "
@@ -258,7 +258,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             # orchestrator._run_generation() directly, bypassing the
             # normal generate() entry point's concept-proposal gate --
             # generate() could decide it needs more detail and ask ANOTHER
-            # question instead of generating, and Maya just said "Give me
+            # question instead of generating, and Sakshi just said "Give me
             # a moment", a promise of immediate action. Same bypass the
             # ADJUST-round-cap escape hatch in orchestrator.generate()
             # already uses. last_generation_id is genuinely None here

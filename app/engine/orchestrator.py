@@ -243,7 +243,7 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     if user_intent in ("QUESTION", "OTHER"):
         await send_text(
             phone,
-            "I'm Maya, your creative partner here! Try something like:\n"
+            "I'm Sakshi, your creative partner here! Try something like:\n"
             "• *Create a weekend offer post*\n"
             "• *Make a Diwali sale creative*\n\n"
             "Or type *credits* / *history* / *topup* anytime.",

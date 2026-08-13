@@ -4,7 +4,7 @@ BARE_GREETINGS + the check in _process_message()).
 
 Previously a bare "hi" from an already-onboarded client fell all the way
 through to orchestrator.generate() -> intent classification -> the
-generic OTHER-intent fallback ("I'm Maya, your creative partner here! Try
+generic OTHER-intent fallback ("I'm Sakshi, your creative partner here! Try
 something like..."). Now it's intercepted early with a short, direct
 prompt, without ever reaching intent classification or (for a genuinely
 new business) re-running onboarding.

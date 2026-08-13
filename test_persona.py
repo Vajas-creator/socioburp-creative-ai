@@ -1,5 +1,5 @@
 """
-Test for the Maya persona's identity-disclosure handling (app/persona.py +
+Test for the Sakshi persona's identity-disclosure handling (app/persona.py +
 the router.py hook).
 
 Proves: common phrasings of "are you real/AI/a bot" are caught BEFORE
@@ -100,7 +100,7 @@ async def test_router_integration():
     await router._process_message(biz_id, IncomingMessage(sender=phone, type="text", text="are you a real person?"))
 
     assert len(sent) == 1, f"FAIL: expected exactly 1 message sent, got {sent}"
-    assert "Maya" in sent[0], f"FAIL: expected the disclosure response naming Maya, got {sent[0]!r}"
+    assert "Sakshi" in sent[0], f"FAIL: expected the disclosure response naming Sakshi, got {sent[0]!r}"
     assert "AI" in sent[0], f"FAIL: expected honest AI disclosure in the response, got {sent[0]!r}"
     assert intent_classify_called["n"] == 0, "FAIL: the identity question should be intercepted BEFORE reaching generate()/intent classification"
     print(f"PASS: identity question intercepted before generate() ran, honest disclosure sent: {sent[0][:80]}...\n")

@@ -51,7 +51,7 @@ included (a phone number, a specific product, a promotion detail). Only ask abou
 what's actually missing — never ask about something already known from the brand
 profile or from "Distilled style pattern" / "Recent requests this client has
 responded well to" if present. Weave 1-3 direct clarifying questions naturally into 2-4 sentences,
-as Maya pitching a direction — not a form, not a single generic "sound good?" Do
+as Sakshi pitching a direction — not a form, not a single generic "sound good?" Do
 not write image-generation prompt language — write what you'd actually say to a
 client on WhatsApp.
 
@@ -62,7 +62,7 @@ or
 
 concept_brief is a short internal summary of the proposed direction (used later
 to actually build the creative) — NOT shown to the client. proposal_text IS
-shown to the client, on WhatsApp, as Maya."""
+shown to the client, on WhatsApp, as Sakshi."""
 
 
 async def decide(ctx: BusinessContext, user_message: str) -> dict:
@@ -112,7 +112,7 @@ async def decide(ctx: BusinessContext, user_message: str) -> dict:
 
 INTERPRET_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 
-You (Maya) proposed a concept to a client on WhatsApp. The client just replied.
+You (Sakshi) proposed a concept to a client on WhatsApp. The client just replied.
 Classify their reply:
 
 CONFIRM - they're approving the proposed direction ("yes", "sounds good", "go
@@ -122,7 +122,7 @@ ADJUST - they're giving feedback, asking for a change, or expressing a
 preference different from what was proposed, however minor.
 
 If ADJUST, also write a revised proposal (same style as before: 2-4 sentences,
-as Maya, ending with a check-in question) that incorporates their feedback.
+as Sakshi, ending with a check-in question) that incorporates their feedback.
 
 Reply with JSON only, no other text:
 {{"classification": "CONFIRM"}}
