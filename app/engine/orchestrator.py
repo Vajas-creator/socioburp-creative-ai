@@ -72,7 +72,7 @@ logger = logging.getLogger("socioburp.engine.orchestrator")
 
 REGEN_THRESHOLD = 60
 CAROUSEL_MIN_SLIDES = 1
-CAROUSEL_MAX_SLIDES = 8
+CAROUSEL_MAX_SLIDES = 9
 CAROUSEL_CREDIT_PER_SLIDE = 1  # same rate as a single creative
 
 
@@ -496,13 +496,29 @@ async def generate_carousel(
     )
 
     async def _build_one_slide(slide_num: int, slide_brief: str) -> bytes:
+        # Deliberately does NOT say "carousel" or "slide X of N" here --
+        # earlier phrasing did, and it reliably got misread as "design a
+        # multi-panel carousel PREVIEW/mockup as one image" (a real,
+        # common stock-template genre) instead of "this is one standalone
+        # photo in a set of separately-delivered photos" -- producing
+        # exactly one collage image with several panels' worth of text
+        # baked in, instead of N separate images. See the Aug 2026
+        # "carousel producing a single collage" incident. Each slide is
+        # framed purely as its own standalone image; the "shared style"
+        # instruction is worded to invite a consistent mood/palette
+        # across separately-generated images, not a single combined one.
         built = await prompt_builder.build(
             ctx,
             (
-                f"This is slide {slide_num} of {slide_count} in an Instagram carousel post -- "
-                f"this specific slide's subject/content is: {slide_brief}. "
-                f"Keep a consistent visual style and color palette with the rest of the "
-                f"carousel, but this slide shows ONLY: {slide_brief}."
+                f"Create ONE standalone image -- not a collage, not a grid, not a "
+                f"multi-panel layout, not a mockup or preview of anything else -- "
+                f"showing: {slide_brief}. This exact same request is being sent "
+                f"{slide_count} times total, once per image, each with different "
+                f"subject matter, to build a themed set of {slide_count} separate "
+                f"photos that will be posted together -- so keep this image's own "
+                f"mood, color palette, and style consistent with a professional, "
+                f"cohesive set, but this single image must show ONLY: {slide_brief}, "
+                f"filling the entire frame by itself."
                 if slide_count > 1 else slide_brief
             ),
         )

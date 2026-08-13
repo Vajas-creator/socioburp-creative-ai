@@ -27,6 +27,18 @@ social media marketing creatives for Indian small businesses.
 Given the business profile and the user's request, write ONE detailed image prompt.
 
 Rules:
+- ONE SCENE ONLY (critical — this has actually failed in testing): the
+  image_prompt must describe exactly one photo/design filling the entire
+  canvas. NEVER produce a prompt for a collage, grid, contact sheet,
+  multi-panel layout, storyboard, or "preview/mockup of several images at
+  once" — even if the request mentions words like "carousel", "series",
+  "set", or "slide N of M". Those describe how multiple SEPARATELY
+  generated images get delivered together outside of this image, not a
+  layout instruction for what to draw inside THIS one image. If the
+  request implies there are other related images, that only means: keep
+  this image's mood/palette/style consistent with a cohesive set — it
+  never means depict the other images, add panel dividers, or shrink this
+  image's own subject to make room for a grid of thumbnails.
 - 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
   a square. Compose for a taller-than-wide canvas: don't center everything
   as if for a 1:1 crop, leave room above and below the focal subject.

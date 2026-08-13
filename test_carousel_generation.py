@@ -10,7 +10,7 @@ content and never asked the user anything, and separately a report of a
 single collage image with baked-in "3/5, 4/5, 5/5" panel labels indicated
 some carousel-shaped requests were falling through to the old
 single-image pipeline entirely. This replaces the fixed-3-slide design
-with a real negotiation: pick a slide count (1-8, via a WhatsApp list
+with a real negotiation: pick a slide count (1-9, via a WhatsApp list
 message) and describe each slide, THEN generate -- N genuinely separate
 images, never a collage.
 
@@ -281,7 +281,7 @@ async def run():
 
     assert len(sent_lists) == 1, f"FAIL: expected exactly one list message asking for a count, got {sent_lists}"
     row_ids = [rid for rid, _ in sent_lists[0]["rows"]]
-    assert row_ids == [f"carousel_count_{n}" for n in range(1, 9)], f"FAIL: expected rows for 1-8, got {row_ids}"
+    assert row_ids == [f"carousel_count_{n}" for n in range(1, 10)], f"FAIL: expected rows for 1-9, got {row_ids}"
     assert len(image_gen_calls) == 0, f"FAIL: nothing should be generated yet, got {image_gen_calls}"
     pending = _pending_carousel(biz_id)
     assert pending is not None, "FAIL: expected pending_carousel to be set"
