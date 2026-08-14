@@ -21,7 +21,9 @@ multiple instances/processes, this needs to become a distributed lock
 silently wrong later.
 """
 import asyncio
+import difflib
 import logging
+import re
 import uuid
 
 from app.db import get_session
@@ -51,6 +53,35 @@ BARE_GREETINGS = {"hi", "hey", "hello", "hii", "hiii", "heya", "hola", "yo"}
 # riskier to get right. "cancel" itself isn't listed here: it's already
 # handled inside carousel.advance()/image_intent.advance() directly.
 UNAMBIGUOUS_GLOBAL_COMMANDS = {"credits", "balance", "topup", "history"}
+
+# Typo-tolerant carousel detection. A live Aug 2026 test session showed
+# every carousel request misspelled as "carasoul"/"carsoul" -- an exact
+# substring check ("carousel" in text) never matched, so every one of
+# those requests silently fell through to the normal single-image
+# pipeline instead of app/engine/carousel.py's negotiation, and (since
+# that pipeline can only ever produce ONE image) is what actually
+# produced the reported "single collage" output, not a separate bug in
+# generate_carousel() itself. Exact substring is checked first (the
+# common, cheap case); the fuzzy fallback only runs on genuinely
+# misspelled words. cutoff=0.72 catches every misspelling actually seen
+# in testing (carasoul/carsoul/carousal/carousle/carosel/carrousel) while
+# rejecting short, unrelated real words that could coincidentally score
+# close (e.g. "carol", "cancel") -- the len>=7 guard does the same job
+# for words far enough from "carousel" in length to not need scoring at
+# all. Deliberately still no Claude call here -- this file is a plain
+# decision tree by design (see module docstring) and a fuzzy string match
+# is a cheap, adequate fix for a keyword users are already trying (and
+# failing) to type, not a general topic-switch classifier.
+_CAROUSEL_WORD_RE = re.compile(r"[a-z]+")
+
+
+def _mentions_carousel(text_lower: str) -> bool:
+    if "carousel" in text_lower:
+        return True
+    for word in _CAROUSEL_WORD_RE.findall(text_lower):
+        if len(word) >= 7 and difflib.get_close_matches(word, ["carousel"], n=1, cutoff=0.72):
+            return True
+    return False
 
 _business_locks: dict[uuid.UUID, asyncio.Lock] = {}
 _locks_registry_lock = asyncio.Lock()  # protects creation of new per-business locks only
@@ -162,7 +193,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
                 convo.pending_carousel = None
         pending_carousel = None
 
-    if pending_image_intent and (text_lower in UNAMBIGUOUS_GLOBAL_COMMANDS or "carousel" in text_lower):
+    if pending_image_intent and (text_lower in UNAMBIGUOUS_GLOBAL_COMMANDS or _mentions_carousel(text_lower)):
         with get_session() as db:
             convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
             if convo:
@@ -267,7 +298,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     # --- Carousel request: kicks off the count/content negotiation ---
     # Keyword-triggered by design (see app/engine/carousel.py) -- never
     # routed through the normal concept-proposal/revision logic below.
-    if "carousel" in text_lower:
+    if _mentions_carousel(text_lower):
         from app.engine import carousel
         await carousel.start(biz_id, msg)
         return
