@@ -28,7 +28,7 @@ from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_buttons, download_media
 from app.storage import upload_reference_image, upload_creative
 from app.engine.context import load_business_context
-from app.engine import image_gen, compositor, caption as caption_engine, learning
+from app.engine import image_gen, compositor, caption as caption_engine, learning, image_history
 from app.config import settings
 from app import credits, payments
 
@@ -86,6 +86,11 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
     if reference_image_url is None:
         await send_text(phone, "Hmm, I couldn't quite process that image 🙏 Could you try sending it again?")
         return
+
+    # Recorded immediately, uploaded photo though it is -- so a LATER
+    # reference like "use the second one" can resolve to it even before
+    # it's ever been generated from. See app/engine/image_history.py.
+    image_history.record_image(business_id, "uploaded", reference_image_url, "a photo the client uploaded")
 
     _save_pending(business_id, {"reference_image_url": reference_image_url})
     await _ask_what_to_do(phone)
@@ -253,6 +258,8 @@ async def _use_as_is(business_id: uuid.UUID, phone: str, reference_image_url: st
             convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
             if convo:
                 convo.last_generation_id = generation_id
+
+        image_history.record_image(business_id, "generated", image_url, "the uploaded photo, posted as-is")
 
         credits.charge_for_generation(business_id, generation_id, amount=1)
         balance = credits.get_balance(business_id)

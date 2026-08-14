@@ -132,6 +132,15 @@ class ConversationState(Base):
     # Tracks an in-progress "what should I do with this uploaded photo"
     # negotiation -- see app/engine/image_intent.py.
     pending_image_intent = Column(Text, nullable=True)
+    # Short-term conversational memory of recent images (both uploaded
+    # photos and generated creatives), newest last, capped at
+    # image_history.MAX_HISTORY -- lets "change that background" / "use
+    # the second one" resolve against real context instead of forcing a
+    # re-upload or blindly assuming "the last thing". See
+    # app/engine/image_history.py. NOT a full history browser (that's
+    # app/history.py, backed directly by the Generation table) -- this is
+    # scoped purely to reference resolution.
+    recent_images = Column(JSONB, nullable=True)
     context = Column(JSONB, default=dict)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
