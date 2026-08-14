@@ -24,6 +24,11 @@ class Settings:
     ANTHROPIC_API_KEY: str = os.environ["ANTHROPIC_API_KEY"]
     CLAUDE_INTENT_MODEL: str = os.environ.get("CLAUDE_INTENT_MODEL", "claude-haiku-4-5-20251001")
     CLAUDE_PROMPT_MODEL: str = os.environ.get("CLAUDE_PROMPT_MODEL", "claude-sonnet-4-6")
+    # Marketing-consultant answers (see app/engine/marketing_advisor.py) --
+    # same tier as CLAUDE_PROMPT_MODEL by default, kept as its own setting
+    # so it can be tuned independently without touching the prompt-builder
+    # model.
+    CLAUDE_MARKETING_MODEL: str = os.environ.get("CLAUDE_MARKETING_MODEL", "claude-sonnet-4-6")
 
     # --- Image generation (set once you pick the benchmark winner) ---
     IMAGE_API_KEY: str = os.environ.get("IMAGE_API_KEY", "")

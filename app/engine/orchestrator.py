@@ -68,6 +68,7 @@ from app.engine import learning
 from app.engine import industry_research
 from app.engine import brand_reflection
 from app.engine import image_history
+from app.engine import marketing_advisor
 from app import persona
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
@@ -323,6 +324,20 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
                 business = db.query(Business).filter(Business.id == business_id).first()
                 business.owner_name = stated_name
             await send_text(phone, f"Nice to meet you, {stated_name}! 😊 Whenever you're ready, just tell me what you'd like me to create.")
+            return
+
+        # Marketing/growth questions ("what should I charge", "when should
+        # I post this") are Sakshi's job too, not just image execution --
+        # see app/engine/marketing_advisor.py. Genuinely off-topic messages
+        # get redirected instead of answered; anything else (casual chat,
+        # ambiguous) falls through to the generic menu below, unchanged.
+        scope = await marketing_advisor.classify_scope(msg.text)
+        if scope == "OFF_TOPIC":
+            await send_text(phone, marketing_advisor.off_topic_redirect(ctx))
+            return
+        if scope == "MARKETING":
+            reply = await marketing_advisor.answer(ctx, msg.text)
+            await send_text(phone, reply)
             return
 
         await send_text(
