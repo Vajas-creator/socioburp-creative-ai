@@ -509,32 +509,21 @@ async def generate_carousel(
     )
 
     async def _build_one_slide(slide_num: int, slide_brief: str) -> bytes:
-        # Deliberately does NOT say "carousel" or "slide X of N" here --
-        # earlier phrasing did, and it reliably got misread as "design a
-        # multi-panel carousel PREVIEW/mockup as one image" (a real,
-        # common stock-template genre) instead of "this is one standalone
-        # photo in a set of separately-delivered photos" -- producing
-        # exactly one collage image with several panels' worth of text
-        # baked in, instead of N separate images. See the Aug 2026
-        # "carousel producing a single collage" incident. Each slide is
-        # framed purely as its own standalone image; the "shared style"
-        # instruction is worded to invite a consistent mood/palette
-        # across separately-generated images, not a single combined one.
-        built = await prompt_builder.build(
-            ctx,
-            (
-                f"Create ONE standalone image -- not a collage, not a grid, not a "
-                f"multi-panel layout, not a mockup or preview of anything else -- "
-                f"showing: {slide_brief}. This exact same request is being sent "
-                f"{slide_count} times total, once per image, each with different "
-                f"subject matter, to build a themed set of {slide_count} separate "
-                f"photos that will be posted together -- so keep this image's own "
-                f"mood, color palette, and style consistent with a professional, "
-                f"cohesive set, but this single image must show ONLY: {slide_brief}, "
-                f"filling the entire frame by itself."
-                if slide_count > 1 else slide_brief
-            ),
-        )
+        # Second collage incident (Aug 2026): even after removing
+        # "carousel"/"slide X of N" wording, a brief that still told the
+        # model "this is 1 of N separately-delivered photos in a themed
+        # set... posted together" was STILL enough context for it to
+        # default to a numbered-panel/preview-mockup genre (a common
+        # training pattern for "social carousel" prompts) -- producing a
+        # single image with baked-in "3/5, 4/5, 5/5"-style panel labels.
+        # Fix: tell the model NOTHING about there being other images at
+        # all. slide_brief is passed to prompt_builder.build() completely
+        # unwrapped, identical to a normal single-image request -- visual
+        # cohesion across the set comes entirely from the shared brand
+        # profile (colors/tone, already part of every prompt_builder call
+        # via ctx), not from telling the model about siblings it should
+        # never be aware exist.
+        built = await prompt_builder.build(ctx, slide_brief)
         image_prompt = built["image_prompt"]
 
         candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_bytes)

@@ -1,40 +1,46 @@
 """
 Regression test for the "carousel produces one collage image instead of N
-separate photos" bug -- reported TWICE: once in the original Aug 2026
-live-test report (traced then to requests falling through to the old
-single-image pipeline, since fixed), and again after the full carousel
-rewrite, from a live screenshot showing a single professionally-composed
-6-panel image (title panel + 5 content panels, each with its own heading
-and body text) delivered as "the carousel."
+separate photos" bug -- reported THREE times: once in the original Aug
+2026 live-test report (traced then to requests falling through to the
+old single-image pipeline, since fixed), again after the full carousel
+rewrite (a live screenshot showing a single professionally-composed
+6-panel image delivered as "the carousel"), and a THIRD time even after
+that fix, with the collage showing baked-in "3/5, 4/5, 5/5"-style panel
+labels.
 
-Root cause the second time: each slide's brief, sent to prompt_builder.py,
-literally said "This is slide X of N in an Instagram carousel post... a
-consistent style with the REST OF THE CAROUSEL" -- Claude (composing the
-actual image_prompt) reasonably read "carousel" as a design genre and
-produced a prompt for a multi-panel carousel PREVIEW/mockup as ONE image,
-a real, common stock-template style -- not as "this app's delivery
-mechanism is N separately-generated photos." All N slides plausibly
-generated near-identical collages; the one used as the WhatsApp preview
-thumbnail (the first slide) is what showed up as "the carousel."
+Root cause the second time: each slide's brief literally said "This is
+slide X of N in an Instagram carousel post... a consistent style with the
+REST OF THE CAROUSEL" -- Claude read "carousel" as a design genre and
+produced a multi-panel PREVIEW/mockup prompt instead of a single photo.
 
-Fixed by rewording the per-slide brief to never say "carousel" or "slide
-X of N," framing each image purely as one standalone photo that happens
-to be part of a separately-delivered themed set, AND by adding an
-explicit "ONE SCENE ONLY, never a collage/grid/multi-panel layout" rule
-to prompt_builder.py's SYSTEM_PROMPT itself, as defense in depth for any
-other caller that might reference "series"/"set"/"carousel" in a brief.
+Root cause the third time: the FIX for the second incident still told the
+model "this exact same request is being sent N times total... to build a
+themed set of N separate photos that will be posted together" -- no
+longer saying "carousel," but still enough context (a numbered set of
+related images, posted together) for the model to default to a
+numbered-panel/preview-mockup genre on its own, baking literal "X/N"
+counters into the image.
+
+Fixed the third time by removing ALL cross-slide framing: the brief sent
+to prompt_builder.build() is now the raw slide content, completely
+unwrapped -- identical to what a normal single-image request would send.
+The model is never told there are other images at all. Visual cohesion
+across the set comes entirely from the shared brand profile (colors/tone,
+already part of every prompt_builder call), not from telling the model
+about siblings it should never be aware exist. prompt_builder.py's
+SYSTEM_PROMPT also now explicitly forbids baked-in page/slide indicators
+("1/5", progress dots, "swipe to see more" UI chrome) as defense in depth.
 
 Covers:
-  - The brief passed to prompt_builder.build() for a multi-slide carousel
-    never contains the word "carousel", and never says "slide N of M".
-  - It explicitly forbids a collage/grid/multi-panel/mockup response.
-  - It still conveys "keep a consistent style across the set" without
-    implying the other images should be depicted.
-  - A single-slide ("carousel" of 1) request is unaffected -- the brief
-    is just the plain content description, unchanged from a normal
-    single-image request.
-  - prompt_builder.py's SYSTEM_PROMPT itself contains an explicit,
-    general anti-collage rule (defense in depth, not just carousel-specific).
+  - Every slide's brief, for ANY slide count > 1, is passed to
+    prompt_builder.build() completely unwrapped -- byte-for-byte identical
+    to its own slide_brief, with zero added framing about a set/series/
+    carousel/count.
+  - A single-slide ("carousel" of 1) request is unaffected -- same
+    behavior as N>1 now, since there's no special-casing left at all.
+  - prompt_builder.py's SYSTEM_PROMPT contains an explicit, general
+    anti-collage rule, including a specific ban on baked-in page/slide
+    indicators (defense in depth, not just carousel-specific).
 """
 import sys
 import asyncio
@@ -173,7 +179,7 @@ def _ctx():
 
 async def run():
     print("=" * 60)
-    print("TEST 1: a multi-slide carousel's per-slide briefs never say 'carousel' or 'slide N of M'")
+    print("TEST 1: a multi-slide carousel's per-slide briefs are completely unwrapped -- zero cross-slide framing")
     print("=" * 60)
     phone = "919999999901"
     biz_id = _make_business(phone)
@@ -193,19 +199,12 @@ async def run():
     )
 
     assert len(prompt_builder_calls) == 6, f"FAIL: expected 6 prompt_builder calls, got {len(prompt_builder_calls)}"
-    for i, brief in enumerate(prompt_builder_calls, start=1):
-        assert "carousel" not in brief.lower(), (
-            f"FAIL: slide {i}'s brief still mentions 'carousel' -- this is exactly what caused the "
-            f"collage bug (Claude reads it as 'design a carousel preview/mockup as one image'), got {brief!r}"
-        )
-        assert f"slide {i} of" not in brief.lower(), (
-            f"FAIL: slide {i}'s brief still uses 'slide N of M' framing, got {brief!r}"
-        )
-        assert "not a collage" in brief.lower() or "standalone image" in brief.lower(), (
-            f"FAIL: expected the brief to explicitly rule out a collage/grid, got {brief!r}"
-        )
-        assert slide_briefs[i - 1] in brief, f"FAIL: expected slide {i}'s own content in its brief, got {brief!r}"
-    print("PASS: no slide's brief mentions 'carousel' or 'slide N of M'; every brief explicitly rules out a collage\n")
+    assert sorted(prompt_builder_calls) == sorted(slide_briefs), (
+        f"FAIL: expected every brief to be byte-for-byte its own slide_brief with zero added framing "
+        f"(no 'themed set of N', no count, no mention of siblings) -- that framing is exactly what caused "
+        f"the second collage incident (baked-in '3/5, 4/5, 5/5' panel labels). Got {prompt_builder_calls}"
+    )
+    print("PASS: every slide's brief is its own content, completely unwrapped\n")
 
     print("=" * 60)
     print("TEST 2: a single-slide 'carousel' (N=1) brief is just the plain content, unchanged")
@@ -217,18 +216,21 @@ async def run():
     await orch.generate_carousel(biz_id2, phone2, _ctx(), ["A single hero shot of our new candle"], user_message="one image please")
 
     assert prompt_builder_calls == ["A single hero shot of our new candle"], (
-        f"FAIL: expected the single-slide brief unchanged (no carousel framing needed for N=1), got {prompt_builder_calls}"
+        f"FAIL: expected the single-slide brief unchanged, got {prompt_builder_calls}"
     )
     print(f"PASS: N=1 brief is plain and unwrapped: {prompt_builder_calls[0]!r}\n")
 
     print("=" * 60)
-    print("TEST 3: prompt_builder.py's own SYSTEM_PROMPT has an explicit, general anti-collage rule")
+    print("TEST 3: prompt_builder.py's own SYSTEM_PROMPT bans collages AND baked-in page/slide indicators")
     print("=" * 60)
     system_lower = prompt_builder.SYSTEM_PROMPT.lower()
     assert "collage" in system_lower, "FAIL: expected an explicit anti-collage rule in prompt_builder's SYSTEM_PROMPT"
     assert "grid" in system_lower, "FAIL: expected 'grid' called out explicitly"
     assert "multi-panel" in system_lower or "multi panel" in system_lower, "FAIL: expected 'multi-panel' called out explicitly"
-    print("PASS: prompt_builder.py's SYSTEM_PROMPT explicitly forbids collage/grid/multi-panel output as defense in depth\n")
+    assert "1/5" in prompt_builder.SYSTEM_PROMPT or "progress bar" in system_lower or "page/slide indicator" in system_lower, (
+        "FAIL: expected an explicit ban on baked-in page/slide counters (the literal '3/5, 4/5, 5/5' symptom reported live)"
+    )
+    print("PASS: prompt_builder.py's SYSTEM_PROMPT explicitly forbids collage/grid/multi-panel output and baked-in slide counters\n")
 
     print("ALL TESTS PASSED")
 
