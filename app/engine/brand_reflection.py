@@ -193,6 +193,54 @@ async def reflect_first_result(ctx: BusinessContext) -> str:
         )
 
 
+EXTRACT_BRAND_DETAILS_SYSTEM_PROMPT = """A client just answered an
+optional onboarding question: "Any brand colors, price range, or style
+dos/don'ts I should know?" Extract structured fields from their free-text
+answer:
+
+- primary_color: a hex color code (e.g. "#C4453D"), ONLY if they clearly
+  named or described one specific color (translate a named color like
+  "burgundy" or "forest green" to its closest hex). null if no color was
+  clearly given.
+- secondary_color: same rules, for a second color if one was given. null
+  otherwise.
+- positioning_notes: a short (1-2 sentence) distillation of anything about
+  price range/positioning (e.g. "premium, not budget") and style dos/
+  don'ts (e.g. "never use pink, keep it minimal") they mentioned. null if
+  they only gave colors and nothing else.
+
+Reply with JSON only, no other text:
+{"primary_color": "#RRGGBB" or null, "secondary_color": "#RRGGBB" or null, "positioning_notes": "..." or null}"""
+
+
+async def extract_brand_details(text: str) -> dict:
+    """
+    Returns {"primary_color": str|None, "secondary_color": str|None,
+    "positioning_notes": str|None}. Falls back to all-None on any failure
+    -- onboarding must still complete even if this extraction fails, it's
+    purely a bonus enrichment.
+    """
+    try:
+        response = await create_message(
+            model=settings.CLAUDE_PROMPT_MODEL,
+            max_tokens=200,
+            system=EXTRACT_BRAND_DETAILS_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": text}],
+        )
+        out = response.content[0].text.strip()
+        if out.startswith("```"):
+            out = out.strip("`").removeprefix("json").strip()
+        parsed = json.loads(out)
+        return {
+            "primary_color": parsed.get("primary_color") or None,
+            "secondary_color": parsed.get("secondary_color") or None,
+            "positioning_notes": parsed.get("positioning_notes") or None,
+        }
+    except Exception:
+        logger.exception("extract_brand_details failed for text=%r", text)
+        return {"primary_color": None, "secondary_color": None, "positioning_notes": None}
+
+
 def _summarize_context(ctx: BusinessContext) -> str:
     lines = [f"Business name: {ctx.name or 'Unknown'}", f"Industry: {ctx.industry or 'Unknown'}"]
     if ctx.tone:

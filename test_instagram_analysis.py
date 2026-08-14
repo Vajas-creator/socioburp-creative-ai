@@ -280,7 +280,8 @@ async def run():
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="hi"))
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # owner-name question
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="I run a bakery"))
-    result = await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="@mytestbakery"))
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="@mytestbakery"))
+    result = await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # brand-details question
     await asyncio.sleep(0.05)  # let the fire-and-forget task actually run
 
     assert result is not None, "FAIL: expected onboarding to complete and return (ctx, brief)"

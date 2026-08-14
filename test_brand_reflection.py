@@ -213,7 +213,8 @@ async def part2_onboarding_wiring():
     print("TEST 5b: completing the Instagram step returns (ctx, brief) for the caller to auto-generate (bypassing generate()'s proposal gate)")
     print("=" * 60)
     generation_calls.clear()
-    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))  # instagram question
+    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))  # brand-details question
     with get_session() as db:
         assert db.query(Business).filter(Business.id == biz_id).first().onboarding_state == "done"
     assert result is not None, "FAIL: expected advance() to return (ctx, brief) when onboarding completes"
