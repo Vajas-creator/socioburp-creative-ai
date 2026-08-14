@@ -1,0 +1,76 @@
+name: Regression tests
+
+# Priority 8 of the Aug 2026 consolidated fix list: the conversation-flow
+# test suite (test_*.py at the repo root) runs automatically instead of
+# only ever being run by hand. Deliberately informational only -- this
+# does NOT gate PR merges (no branch-protection required-check is set up
+# for this workflow), since Render auto-deploys from pushes to main
+# regardless of CI status and an urgent merge shouldn't be blocked by a
+# known/flaky test. The point is visibility (a red run shows up on the PR
+# and on main), not an enforced gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # Only test_revision_classifier.py uses this (it defaults to exactly
+      # this connection when TEST_DATABASE_URL isn't overridden) -- every
+      # other test file runs against its own throwaway sqlite file.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: socioburp
+          POSTGRES_PASSWORD: socioburp
+          POSTGRES_DB: socioburp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Fake-but-present values for every setting app/config.py requires
+      # with no default -- these test files never make real WhatsApp/
+      # Anthropic calls (everything's mocked), they just need the app to
+      # import without KeyError.
+      WA_VERIFY_TOKEN: fake
+      WA_ACCESS_TOKEN: fake
+      WA_PHONE_NUMBER_ID: fake
+      ANTHROPIC_API_KEY: fake
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: |
+          set +e
+          failures=0
+          for f in test_*.py; do
+            echo "::group::$f"
+            rm -f "${f%.py}.db"
+            python3 "$f"
+            status=$?
+            echo "::endgroup::"
+            if [ $status -ne 0 ]; then
+              echo "::error::$f failed (exit $status)"
+              failures=$((failures + 1))
+            fi
+          done
+          echo "----------------------------------------"
+          echo "$failures test file(s) failed"
+          exit $failures

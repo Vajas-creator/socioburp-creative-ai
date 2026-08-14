@@ -36,7 +36,7 @@ from app.db import get_session
 from app.models import Business, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text
-from app import onboarding, credits, payments, persona, i18n, analytics, allowlist
+from app import onboarding, credits, payments, persona, i18n, analytics, allowlist, alerting
 from app.engine import router_intent
 
 logger = logging.getLogger("socioburp.router")
@@ -89,8 +89,12 @@ async def handle_message(msg: IncomingMessage):
         async with lock:
             await _process_message(biz_id, msg)
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Unhandled error processing message from %s", msg.sender)
+        await alerting.send_alert(
+            "unhandled_message_error",
+            f"Unhandled error processing a message from {msg.sender}: {exc!r}",
+        )
         await send_text(
             msg.sender,
             "Something went wrong on our end 🙏 No credits were charged. "

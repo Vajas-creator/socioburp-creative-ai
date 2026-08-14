@@ -30,7 +30,7 @@ from app.storage import upload_reference_image, upload_creative
 from app.engine.context import load_business_context
 from app.engine import image_gen, compositor, caption as caption_engine, learning, image_history
 from app.config import settings
-from app import credits, payments, allowlist
+from app import credits, payments, allowlist, alerting
 
 logger = logging.getLogger("socioburp.engine.image_intent")
 
@@ -274,6 +274,10 @@ async def _use_as_is(business_id: uuid.UUID, phone: str, reference_image_url: st
         await _deliver_creative(phone, business_id, generation_id, image_url, full_caption[:1024])
         await send_text(phone, f"✨ Here's your post!\n\n💳 Credits left: {balance}{low_balance_note}")
 
-    except Exception:
+    except Exception as exc:
         logger.exception("'Use as-is' delivery failed for business=%s", business_id)
+        await alerting.send_alert(
+            "use_as_is_failed",
+            f"'Use as-is' delivery failed for business={business_id}: {exc!r}",
+        )
         await send_text(phone, "Something went wrong 🙏 No credits were charged. Please try again.")
