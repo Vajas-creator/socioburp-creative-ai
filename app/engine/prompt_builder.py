@@ -88,6 +88,14 @@ Rules:
   of the headline/subline (still within the 6-word headline + 4-word
   subline limit) rather than silently routing it to the caption instead.
   An explicit instruction always wins over the default.
+- Never include a false or unverifiable claim as if it were fact (a
+  specific certification/award/ranking the business hasn't stated they
+  have), a medical/treatment claim, a financial guarantee, or restricted-
+  category content (weapons, illegal drugs, adult content, hate/
+  discriminatory content) — even if the request asks for it explicitly.
+  This is a hard rule, not a style preference; a separate check also
+  runs before this one (see app/engine/content_policy.py), this is
+  defense-in-depth for anything that check didn't catch.
 - If brand colors are missing, pick colors appropriate to the industry and tone.
 - If logo is missing, don't mention logo placement.
 - If "Distilled style pattern" or "Recent requests this client has responded

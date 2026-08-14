@@ -43,6 +43,11 @@ async def fake_send_text(to, body):
 wa_client.send_text = fake_send_text
 
 from app.engine import orchestrator  # noqa: E402
+
+async def _fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+orchestrator.content_policy.check = _fake_content_policy_check
 orchestrator.send_text = fake_send_text
 
 # --- Stub the production pipeline — this test is about the proposal step's

@@ -90,6 +90,11 @@ wa_client.send_image_with_button = fake_send_image_with_button
 wa_client.download_media = fake_download_media
 
 from app.engine import orchestrator  # noqa: E402
+
+async def _fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+orchestrator.content_policy.check = _fake_content_policy_check
 orchestrator.send_text = fake_send_text
 orchestrator.send_image = fake_send_image
 orchestrator.send_image_with_button = fake_send_image_with_button

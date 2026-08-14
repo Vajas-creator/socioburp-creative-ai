@@ -183,6 +183,11 @@ async def part2_onboarding_wiring():
         generation_calls.append(trigger_source)
 
     import app.engine.orchestrator as orch
+    
+    async def _fake_content_policy_check(text):
+        return {"allowed": True, "reason": None}
+    
+    orch.content_policy.check = _fake_content_policy_check
     real_run_generation = orch._run_generation  # restored below -- part3 needs the real one
     orch._run_generation = fake_run_generation
 
@@ -243,6 +248,11 @@ async def part3_orchestrator_wiring():
     from PIL import Image
     from app.whatsapp import client as wa_client
     from app.engine import orchestrator
+    
+    async def _fake_content_policy_check(text):
+        return {"allowed": True, "reason": None}
+    
+    orchestrator.content_policy.check = _fake_content_policy_check
     from app.db import get_session
     from app.models import Business, BrandProfile
     from app.schemas import IncomingMessage

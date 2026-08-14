@@ -59,6 +59,11 @@ from app.schemas import IncomingMessage  # noqa: E402
 from app import onboarding  # noqa: E402
 from app.engine import orchestrator  # noqa: E402
 
+async def _fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+orchestrator.content_policy.check = _fake_content_policy_check
+
 sent = []
 
 
