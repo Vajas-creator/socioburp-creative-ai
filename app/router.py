@@ -36,7 +36,7 @@ from app.db import get_session
 from app.models import Business, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text
-from app import onboarding, credits, payments, persona, i18n, analytics
+from app import onboarding, credits, payments, persona, i18n, analytics, allowlist
 from app.engine import router_intent
 
 logger = logging.getLogger("socioburp.router")
@@ -287,7 +287,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         return
 
     # --- Credit check before anything that costs money ---
-    if credits.get_balance(biz_id) < 1:
+    if not allowlist.has_unlimited_access(msg.sender) and credits.get_balance(biz_id) < 1:
         await payments.send_topup_options(
             biz_id, msg.sender,
             prefix="You're out of credits! 🙏 "

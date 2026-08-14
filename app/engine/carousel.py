@@ -33,7 +33,7 @@ from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text, send_list, download_media
 from app.storage import upload_reference_image
 from app.engine.context import load_business_context
-from app import credits, payments
+from app import credits, payments, allowlist
 
 logger = logging.getLogger("socioburp.engine.carousel")
 
@@ -208,8 +208,9 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
     ask-count-then-ask-content negotiation for a genuinely vague request.
     """
     phone = msg.sender
+    unlimited = allowlist.has_unlimited_access(phone)
 
-    if credits.get_balance(business_id) < MIN_SLIDES:
+    if not unlimited and credits.get_balance(business_id) < MIN_SLIDES:
         await payments.send_topup_options(business_id, phone, prefix="You're out of credits! 🙏 ")
         return
 
@@ -225,7 +226,7 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
         # to ask, generate immediately.
         count = inferred_count or len(inferred_slides)
         count = max(MIN_SLIDES, min(MAX_SLIDES, count))
-        if credits.get_balance(business_id) < count:
+        if not unlimited and credits.get_balance(business_id) < count:
             await payments.send_topup_options(
                 business_id, phone,
                 prefix=f"A {count}-image carousel uses {count} credits and you don't have enough right now 🙏 "
@@ -244,7 +245,7 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
     if inferred_count:
         # They said how many but not what each one shows -- skip straight
         # to that one remaining question instead of also asking count.
-        if credits.get_balance(business_id) < inferred_count:
+        if not unlimited and credits.get_balance(business_id) < inferred_count:
             await payments.send_topup_options(
                 business_id, phone,
                 prefix=f"A {inferred_count}-image carousel uses {inferred_count} credits and you don't have enough right now 🙏 "
@@ -305,6 +306,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str
     message meant as an answer to whatever's pending.
     """
     phone = msg.sender
+    unlimited = allowlist.has_unlimited_access(phone)
     pending = json.loads(pending_raw)
 
     # A photo can arrive on any turn, not just the first -- keep the most
@@ -323,7 +325,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str
             await _ask_count(phone)
             return
 
-        if credits.get_balance(business_id) < count:
+        if not unlimited and credits.get_balance(business_id) < count:
             _clear_pending(business_id)
             await payments.send_topup_options(
                 business_id, phone,

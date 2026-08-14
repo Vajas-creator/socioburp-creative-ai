@@ -71,7 +71,7 @@ from app.engine import image_history
 from app.engine import marketing_advisor
 from app.engine import content_policy
 from app.engine import ai_metadata
-from app import persona
+from app import persona, allowlist
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
@@ -491,6 +491,7 @@ async def generate_carousel(
     """
     slide_count = len(slide_briefs)
     credit_cost = slide_count * CAROUSEL_CREDIT_PER_SLIDE
+    unlimited = allowlist.has_unlimited_access(phone)
 
     # Content-policy guardrail, checked once against the client's own
     # request before any paid API call runs -- see
@@ -561,7 +562,7 @@ async def generate_carousel(
             raise RuntimeError(f"No image returned for carousel slide {slide_num}")
 
         scored = await quality.score_and_pick(candidates)
-        if scored["best_score"] < REGEN_THRESHOLD and regen_within_budget(business_id):
+        if scored["best_score"] < REGEN_THRESHOLD and (unlimited or regen_within_budget(business_id)):
             # One regen attempt, same bound as the single-image pipeline.
             # If the budget's exhausted, deliver the best candidate we
             # have rather than blocking (see the docstring above) --
@@ -645,7 +646,8 @@ async def generate_carousel(
             f"{slide_count}-slide carousel: {user_message}" if slide_count > 1 else user_message,
         )
 
-        charge_for_generation(business_id, generation_id, amount=credit_cost)
+        if not unlimited:
+            charge_for_generation(business_id, generation_id, amount=credit_cost)
 
         balance = get_balance(business_id)
         low_balance_note = (
@@ -804,6 +806,8 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         await send_text(phone, f"I can't include that 🙏 {policy['reason']} No credits were charged.")
         return
 
+    unlimited = allowlist.has_unlimited_access(phone)
+
     try:
         if last_generation_id is None:
             # This business's very first-ever generation -- a one-time,
@@ -901,7 +905,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         scored = await quality.score_and_pick(candidates)
 
         if scored["best_score"] < REGEN_THRESHOLD:
-            if not regen_within_budget(business_id):
+            if not unlimited and not regen_within_budget(business_id):
                 # This business has used its earned quality-check regen
                 # allowance for the current credit batch (see credits.py).
                 # Per policy: block rather than deliver a known-low-quality
@@ -1008,7 +1012,8 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         image_history.record_image(business_id, "generated", image_url, user_message)
 
         # --- Charge AFTER success, never before ---
-        charge_for_generation(business_id, generation_id, amount=1)
+        if not unlimited:
+            charge_for_generation(business_id, generation_id, amount=1)
 
         # --- Deliver ---
         balance = get_balance(business_id)
