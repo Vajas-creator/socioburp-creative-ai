@@ -43,8 +43,6 @@ from app.anthropic_client import create_message
 MIN_SLIDES = 1
 MAX_SLIDES = 9
 
-CANCEL_WORDS = {"cancel", "never mind", "nevermind", "skip", "stop"}
-
 COMBINED_SYSTEM_PROMPT = """A client just asked for an Instagram carousel
 post, in one message. Figure out what they've already told us so we don't
 ask for anything they've already said:
@@ -298,15 +296,16 @@ def _parse_count(msg: IncomingMessage) -> int | None:
 
 
 async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str):
-    """Called for every message while a carousel negotiation is in progress (see app/router.py)."""
+    """
+    Called for every message while a carousel negotiation is in progress
+    (see app/router.py). "cancel" (and any global command or, mid-image-
+    upload-negotiation, an explicit carousel request) is intercepted by
+    app/router.py itself, via app/engine/router_intent.py's classifier,
+    BEFORE this function is ever called -- this function only ever sees a
+    message meant as an answer to whatever's pending.
+    """
     phone = msg.sender
     pending = json.loads(pending_raw)
-
-    text_lower = (msg.text or "").strip().lower()
-    if text_lower in CANCEL_WORDS:
-        _clear_pending(business_id)
-        await send_text(phone, "No worries, carousel cancelled 👍 Let me know if you'd like to try again.")
-        return
 
     # A photo can arrive on any turn, not just the first -- keep the most
     # recent one.

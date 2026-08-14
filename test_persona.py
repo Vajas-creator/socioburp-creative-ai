@@ -74,6 +74,15 @@ async def test_router_integration():
     from app import router
     router.send_text = fake_send_text
 
+    from app.engine import router_intent
+
+    async def fake_router_classify(text):
+        if not text or not text.strip():
+            return {"intent": "OTHER", "command": None}
+        return router_intent._fallback_classify(text)
+
+    router_intent.classify = fake_router_classify
+
     intent_classify_called = {"n": 0}
 
     async def fake_generate(business_id, msg):

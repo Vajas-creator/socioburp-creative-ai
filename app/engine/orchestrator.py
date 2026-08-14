@@ -67,6 +67,7 @@ from app.engine import quality
 from app.engine import learning
 from app.engine import industry_research
 from app.engine import brand_reflection
+from app import persona
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
@@ -311,6 +312,18 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
     brief = result["brief"]
 
     if user_intent in ("QUESTION", "OTHER"):
+        # A volunteered name ("by the way, my name's Priya") deserves a
+        # real acknowledgment, not the generic menu reply below repeated
+        # back at them as if they hadn't said anything -- see
+        # persona.extract_stated_name()'s docstring.
+        stated_name = persona.extract_stated_name(msg.text)
+        if stated_name:
+            with get_session() as db:
+                business = db.query(Business).filter(Business.id == business_id).first()
+                business.owner_name = stated_name
+            await send_text(phone, f"Nice to meet you, {stated_name}! 😊 Whenever you're ready, just tell me what you'd like me to create.")
+            return
+
         await send_text(
             phone,
             "I'm Sakshi, your creative partner here! Try something like:\n"

@@ -34,8 +34,6 @@ from app import credits, payments
 
 logger = logging.getLogger("socioburp.engine.image_intent")
 
-CANCEL_WORDS = {"cancel", "never mind", "nevermind", "skip", "stop"}
-
 BUTTON_CHANGE_BG = "img_change_bg"
 BUTTON_USE_AS_IS = "img_use_as_is"
 BUTTON_SOMETHING_ELSE = "img_something_else"
@@ -94,15 +92,16 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
 
 
 async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str):
-    """Called for every message while this negotiation is in progress (see app/router.py)."""
+    """
+    Called for every message while this negotiation is in progress (see
+    app/router.py). "cancel" (and any global command or explicit carousel
+    request) is intercepted by app/router.py itself, via
+    app/engine/router_intent.py's classifier, BEFORE this function is
+    ever called -- this function only ever sees a message meant as an
+    answer to whatever's pending.
+    """
     phone = msg.sender
     pending = json.loads(pending_raw)
-
-    text_lower = (msg.text or "").strip().lower()
-    if text_lower in CANCEL_WORDS:
-        _clear_pending(business_id)
-        await send_text(phone, "No worries — let me know if you'd like to do something with it later 👍")
-        return
 
     new_reference_url = await _persist_photo(business_id, msg)
     if new_reference_url:

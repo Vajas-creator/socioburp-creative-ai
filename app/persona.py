@@ -16,6 +16,7 @@ prompts for Claude calls that produce client-facing text (see
 concept_proposal.py). ANNOUNCE_TEXT / DISCLOSURE_TEXT are static template
 strings (translated via app.i18n.t, same as other fixed messages).
 """
+import re
 
 PERSONA_NAME = "Sakshi"
 
@@ -51,3 +52,41 @@ IDENTITY_QUESTION_PATTERNS = (
 def is_identity_question(text: str) -> bool:
     text_lower = (text or "").strip().lower()
     return any(p in text_lower for p in IDENTITY_QUESTION_PATTERNS)
+
+
+# Mid-conversation name statements ("by the way, my name's Priya") -- not
+# during onboarding's own dedicated name question (see app/onboarding.py,
+# a separate state-machine step), but a client volunteering it later, any
+# time. Previously this had nowhere to go: intent_engine.classify() calls
+# it OTHER, and orchestrator.generate() sent the generic "I'm Sakshi, your
+# creative partner here! Try something like..." menu reply right back --
+# ignoring what they just said, which reads as not listening. Deliberately
+# a narrow, keyword-anchored regex, not a Claude call -- same reasoning as
+# IDENTITY_QUESTION_PATTERNS above: covers the common explicit phrasings,
+# and a less common one just falls through to the normal OTHER handling
+# (a known, accepted gap, not a silent failure).
+_NAME_STATEMENT_PATTERNS = (
+    re.compile(r"\bmy name(?:'s| is)\s+([A-Za-z][A-Za-z'\-]{1,30})", re.IGNORECASE),
+    re.compile(r"\byou can call me\s+([A-Za-z][A-Za-z'\-]{1,30})", re.IGNORECASE),
+    re.compile(r"\bcall me\s+([A-Za-z][A-Za-z'\-]{1,30})", re.IGNORECASE),
+)
+
+# "call me" is also common in phrasings that aren't a name at all ("call me
+# back", "call me later/tomorrow") -- a plain regex can't tell those apart
+# from "call me Dev", so anything captured that's one of these gets
+# rejected rather than saved as someone's name.
+_NAME_STOPWORDS = {"back", "later", "tomorrow", "today", "tonight", "now", "soon", "anytime", "please", "when"}
+
+
+def extract_stated_name(text: str) -> str | None:
+    """Best-effort extraction of a name volunteered mid-conversation, or None."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    for pattern in _NAME_STATEMENT_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            name = m.group(1).strip(" .,!?'-")
+            if name and name.lower() not in _NAME_STOPWORDS:
+                return name.capitalize()
+    return None
