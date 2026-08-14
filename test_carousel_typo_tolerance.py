@@ -11,20 +11,27 @@ ever produce ONE image -- and is what actually produced the reported
 (see test_carousel_no_collage.py, which already proves generate_carousel()
 itself produces genuinely separate, non-collage images once it's reached).
 
-Fixed with app/router.py's _mentions_carousel(): exact substring first
-(cheap, common case), then a fuzzy per-word fallback (difflib, cutoff=0.72,
-word length >= 7) that catches real misspellings without false-positiving
-on short, unrelated real words.
+First fixed with a fuzzy per-word match in app/router.py. Superseded by a
+broader fix (see the Aug 2026 consolidated fix list, Priority 1): the same
+exact-substring blind spot existed for EVERY keyword check in the router
+(greetings, credits/topup/history, cancel words), not just carousel, so
+the whole cascade was replaced with one LLM classification call per
+message -- see app/engine/router_intent.py. The original difflib-based
+fuzzy match survives there as _fallback_classify(), used only when the
+Claude call itself fails, so this test still exercises real code, just
+one layer deeper than before.
 
 Covers:
-  - _mentions_carousel() directly: every typo actually seen in testing
-    ("carasoul", "carsoul") plus other plausible misspellings match: unrelated
-    real words ("carol", "cancel", "casual", "carnival") do NOT match.
-  - router._process_message() integration: a message reading "I want a
-    carasoul with 5 images" now reaches carousel.start(), NOT
-    orchestrator.generate().
-  - A pending_image_intent negotiation is also correctly cancelled by a
-    misspelled "carasoul" mid-negotiation (same fix applied to that check).
+  - router_intent._mentions_carousel() directly: every typo actually seen
+    in testing ("carasoul", "carsoul") plus other plausible misspellings
+    match; unrelated real words ("carol", "cancel", "casual", "carnival")
+    do NOT match.
+  - router_intent._fallback_classify() end to end: a misspelled request
+    classifies as CAROUSEL_REQUEST.
+  - router._process_message() integration (LLM classifier mocked to the
+    same fallback rules, so this stays deterministic and network-free): a
+    message reading "I want a carasoul with 5 images" reaches
+    carousel.start(), NOT orchestrator.generate().
 """
 import sys
 import asyncio
@@ -51,11 +58,21 @@ import app.models  # noqa: E402
 db_module.Base.metadata.create_all(bind=db_module.engine)
 
 from app import router  # noqa: E402
+from app.engine import router_intent  # noqa: E402
+
+
+async def fake_router_classify(text):
+    if not text or not text.strip():
+        return {"intent": "OTHER", "command": None}
+    return router_intent._fallback_classify(text)
+
+
+router_intent.classify = fake_router_classify
 
 
 def test_mentions_carousel_directly():
     print("=" * 60)
-    print("TEST 1: _mentions_carousel() -- typos seen live, plus other plausible ones")
+    print("TEST 1: router_intent._mentions_carousel() -- typos seen live, plus other plausible ones")
     print("=" * 60)
     positive_cases = [
         "i want a carasoul with 5 images",
@@ -67,24 +84,31 @@ def test_mentions_carousel_directly():
         "carousel",  # exact spelling still works
     ]
     for text in positive_cases:
-        assert router._mentions_carousel(text.lower()), f"FAIL: expected {text!r} to trigger carousel mode"
+        assert router_intent._mentions_carousel(text.lower()), f"FAIL: expected {text!r} to trigger carousel mode"
     print(f"PASS: all {len(positive_cases)} spellings (correct + typo'd) correctly matched\n")
 
     print("=" * 60)
-    print("TEST 2: _mentions_carousel() -- unrelated real words do NOT false-positive")
+    print("TEST 2: router_intent._mentions_carousel() -- unrelated real words do NOT false-positive")
     print("=" * 60)
     negative_cases = [
         "my name is carol", "please cancel my order", "keep it casual",
         "carnival theme post", "create a weekend offer post", "make it more premium",
     ]
     for text in negative_cases:
-        assert not router._mentions_carousel(text.lower()), f"FAIL: expected {text!r} to NOT trigger carousel mode"
+        assert not router_intent._mentions_carousel(text.lower()), f"FAIL: expected {text!r} to NOT trigger carousel mode"
     print(f"PASS: all {len(negative_cases)} unrelated phrasings correctly did NOT match\n")
+
+    print("=" * 60)
+    print("TEST 3: router_intent._fallback_classify() end to end")
+    print("=" * 60)
+    result = router_intent._fallback_classify("i want a carasoul with 5 images")
+    assert result["intent"] == "CAROUSEL_REQUEST", f"FAIL: expected CAROUSEL_REQUEST, got {result}"
+    print(f"PASS: {result}\n")
 
 
 async def test_router_integration():
     print("=" * 60)
-    print("TEST 3: router.py integration -- a misspelled 'carasoul' request reaches carousel.start(), not generate()")
+    print("TEST 4: router.py integration -- a misspelled 'carasoul' request reaches carousel.start(), not generate()")
     print("=" * 60)
 
     from app.whatsapp import client as wa_client
@@ -108,7 +132,6 @@ async def test_router_integration():
 
     from app.engine import carousel as carousel_module
     carousel_module.start = fake_carousel_start
-    router.carousel = carousel_module
 
     import app.engine.orchestrator as orch
     orch.generate = fake_generate

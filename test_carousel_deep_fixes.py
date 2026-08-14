@@ -93,6 +93,17 @@ wa_client.send_list = fake_send_list
 from app import router  # noqa: E402
 router.send_text = fake_send_text
 
+from app.engine import router_intent  # noqa: E402
+
+
+async def fake_router_classify(text):
+    if not text or not text.strip():
+        return {"intent": "OTHER", "command": None}
+    return router_intent._fallback_classify(text)
+
+
+router_intent.classify = fake_router_classify
+
 from app.engine import orchestrator as orch  # noqa: E402
 orch.send_text = fake_send_text
 orch.send_image = fake_send_image

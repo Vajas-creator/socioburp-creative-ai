@@ -70,6 +70,17 @@ async def fake_send_text(to, body):
 wa_client.send_text = fake_send_text
 router.send_text = fake_send_text
 
+from app.engine import router_intent  # noqa: E402
+
+
+async def fake_router_classify(text):
+    if not text or not text.strip():
+        return {"intent": "OTHER", "command": None}
+    return router_intent._fallback_classify(text)
+
+
+router_intent.classify = fake_router_classify
+
 onboarding_calls = []
 
 

@@ -1,6 +1,14 @@
 """
-The router is deliberately NOT an AI call — it's a plain decision tree.
-Save Claude calls for where they actually add value (intent, prompts, captions).
+Top-level message dispatch. Structural checks (onboarding state, an
+in-progress negotiation, button taps, message type) are still plain
+control flow, no AI involved. But what KIND of message this text is
+(greeting / identity question / global command / carousel request /
+cancel / a normal request) is decided by one Claude call per message --
+see app/engine/router_intent.py -- instead of the exact-keyword cascade
+this used to be. That cascade's blind spot (a misspelled "carousel"
+silently fell through to the wrong pipeline entirely) turned out to be
+systemic, not a one-off; see that module's docstring for the full
+reasoning and the cost/latency tradeoff being made here.
 
 Concurrency: FastAPI dispatches each webhook event via BackgroundTasks
 (see app/whatsapp/webhook.py) — meaning if a client sends two WhatsApp
@@ -21,9 +29,7 @@ multiple instances/processes, this needs to become a distributed lock
 silently wrong later.
 """
 import asyncio
-import difflib
 import logging
-import re
 import uuid
 
 from app.db import get_session
@@ -31,57 +37,9 @@ from app.models import Business, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text
 from app import onboarding, credits, payments, persona, i18n, analytics
+from app.engine import router_intent
 
 logger = logging.getLogger("socioburp.router")
-
-# Bare greetings from an already-onboarded client -- "hi" with no actual
-# request in it. Deliberately a plain keyword set, not an intent-classifier
-# call: this file is a plain decision tree by design (see module docstring),
-# and a returning user just saying hello is exactly the cheap, unambiguous
-# case that doesn't need a Claude call to recognize.
-BARE_GREETINGS = {"hi", "hey", "hello", "hii", "hiii", "heya", "hola", "yo"}
-
-# A pending carousel/image-upload negotiation (see app/engine/carousel.py,
-# app/engine/image_intent.py) normally treats EVERY reply as belonging to
-# that negotiation -- simple and correct for genuine free-text answers.
-# But these specific words are already unambiguous, exact-match global
-# commands everywhere ELSE in this router (see the checks further down);
-# typing one of them mid-negotiation is far more likely to mean "actually,
-# forget that, I want X" than a literal answer to the pending question
-# ("credits" as a slide description makes no sense). Deliberately narrow --
-# NOT a general "detect topic switch" heuristic, which would be far
-# riskier to get right. "cancel" itself isn't listed here: it's already
-# handled inside carousel.advance()/image_intent.advance() directly.
-UNAMBIGUOUS_GLOBAL_COMMANDS = {"credits", "balance", "topup", "history"}
-
-# Typo-tolerant carousel detection. A live Aug 2026 test session showed
-# every carousel request misspelled as "carasoul"/"carsoul" -- an exact
-# substring check ("carousel" in text) never matched, so every one of
-# those requests silently fell through to the normal single-image
-# pipeline instead of app/engine/carousel.py's negotiation, and (since
-# that pipeline can only ever produce ONE image) is what actually
-# produced the reported "single collage" output, not a separate bug in
-# generate_carousel() itself. Exact substring is checked first (the
-# common, cheap case); the fuzzy fallback only runs on genuinely
-# misspelled words. cutoff=0.72 catches every misspelling actually seen
-# in testing (carasoul/carsoul/carousal/carousle/carosel/carrousel) while
-# rejecting short, unrelated real words that could coincidentally score
-# close (e.g. "carol", "cancel") -- the len>=7 guard does the same job
-# for words far enough from "carousel" in length to not need scoring at
-# all. Deliberately still no Claude call here -- this file is a plain
-# decision tree by design (see module docstring) and a fuzzy string match
-# is a cheap, adequate fix for a keyword users are already trying (and
-# failing) to type, not a general topic-switch classifier.
-_CAROUSEL_WORD_RE = re.compile(r"[a-z]+")
-
-
-def _mentions_carousel(text_lower: str) -> bool:
-    if "carousel" in text_lower:
-        return True
-    for word in _CAROUSEL_WORD_RE.findall(text_lower):
-        if len(word) >= 7 and difflib.get_close_matches(word, ["carousel"], n=1, cutoff=0.72):
-            return True
-    return False
 
 _business_locks: dict[uuid.UUID, asyncio.Lock] = {}
 _locks_registry_lock = asyncio.Lock()  # protects creation of new per-business locks only
@@ -173,100 +131,9 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
             )
         return
 
-    # Computed early -- needed both for the pending-negotiation escape
-    # hatch right below and the global keywords further down.
-    text_lower = (msg.text or "").strip().lower()
-
-    # --- An in-progress carousel negotiation (slide count / per-slide
-    # content) takes priority over everything below, same principle as
-    # onboarding above -- every reply belongs to that negotiation until it
-    # finishes or the client cancels. See app/engine/carousel.py. EXCEPT
-    # an unambiguous global command (see UNAMBIGUOUS_GLOBAL_COMMANDS
-    # above), or explicitly asking for a carousel while mid-image-upload
-    # negotiation -- both read as "switch context", not an answer to the
-    # pending question, so the negotiation is dropped and the message
-    # falls through to be handled normally instead.
-    if pending_carousel and text_lower in UNAMBIGUOUS_GLOBAL_COMMANDS:
-        with get_session() as db:
-            convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
-            if convo:
-                convo.pending_carousel = None
-        pending_carousel = None
-
-    if pending_image_intent and (text_lower in UNAMBIGUOUS_GLOBAL_COMMANDS or _mentions_carousel(text_lower)):
-        with get_session() as db:
-            convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
-            if convo:
-                convo.pending_image_intent = None
-        pending_image_intent = None
-
-    if pending_carousel:
-        from app.engine import carousel
-        await carousel.advance(biz_id, msg, pending_carousel)
-        return
-
-    # --- Same for an in-progress "what should I do with this photo"
-    # negotiation. See app/engine/image_intent.py.
-    if pending_image_intent:
-        from app.engine import image_intent
-        await image_intent.advance(biz_id, msg, pending_image_intent)
-        return
-
-    # Instrumentation only, no behavior change -- logs 'user_returned_voluntarily'
-    # if it's been a while since this business's last logged event. See
-    # app/analytics.py for the heuristic (there's no real "session" concept
-    # in this app to key off instead).
-    analytics.maybe_log_voluntary_return(biz_id)
-
-    # --- A message type we genuinely can't process (voice note, video,
-    # document, sticker, location, contact card, ...) -- acknowledge
-    # instead of silently dropping it. See app/whatsapp/webhook.py's
-    # parse_message(), which used to return None here (total silence, the
-    # same failure mode the "uploaded image with no caption" bug had).
-    if msg.type == "unsupported":
-        await send_text(msg.sender, "I can only understand text messages and photos right now 🙏 Could you try one of those?")
-        return
-
-    # A returning user (already onboarded, hence past the state check
-    # above) saying just "hi" gets a short, direct prompt -- never routed
-    # back into onboarding (that only ever happens for a business with no
-    # profile yet, per the state check above) and never left to fall
-    # through to the generic OTHER-intent fallback in orchestrator.generate().
-    # Trailing punctuation ("Hello!", "hey.", "hi??") is stripped just for
-    # this check -- text_lower itself is left untouched below, since the
-    # other exact-match keywords (credits/topup/etc.) aren't meant to
-    # tolerate that.
-    greeting_candidate = text_lower.rstrip("!.,?~ ")
-    if greeting_candidate in BARE_GREETINGS:
-        # Personal, not generic -- addresses them by name (whatever's on
-        # file from onboarding) so a returning client feels like they're
-        # picking a conversation back up with someone who knows them, not
-        # re-introducing themselves to a form. Falls back to the old
-        # generic line only if no name was ever captured.
-        greeting = (
-            f"Hey {display_name}! How's it going? What do you want me to build today? 💡"
-            if display_name else "Hey! Want today's post? I've got an idea. 💡"
-        )
-        await send_text(msg.sender, greeting)
-        return
-
-    if persona.is_identity_question(msg.text or ""):
-        with get_session() as db:
-            biz = db.query(Business).filter(Business.id == biz_id).first()
-            language = biz.preferred_language or "en"
-        reply = await i18n.t("identity_disclosure", language, persona.DISCLOSURE_TEXT)
-        await send_text(msg.sender, reply)
-        return
-
-    if text_lower in ("credits", "balance"):
-        bal = credits.get_balance(biz_id)
-        await send_text(msg.sender, f"💳 You have {bal} credits remaining.")
-        return
-
-    if text_lower == "topup":
-        await payments.send_topup_options(biz_id, msg.sender)
-        return
-
+    # Button replies are WhatsApp-generated IDs, never typed by the user --
+    # no typo risk, no reason to spend a classification call on them.
+    # Checked before classification so a button tap never triggers one.
     if msg.button_id and msg.button_id.startswith("pack_"):
         # button reply from the topup options — must check button_id,
         # not text (text is the button's display title, e.g. "50 credits",
@@ -290,15 +157,122 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         await instagram.handle_post_request(biz_id, msg.sender, generation_id)
         return
 
-    if text_lower == "history":
-        from app.history import send_recent_generations
-        await send_recent_generations(biz_id, msg.sender)
+    # One classification call drives everything below -- see
+    # app/engine/router_intent.py. Skips the Claude call itself (returns
+    # OTHER) for empty text, e.g. an image upload with no caption.
+    classification = await router_intent.classify(msg.text)
+    intent = classification["intent"]
+
+    # --- An in-progress carousel negotiation (slide count / per-slide
+    # content) or "what should I do with this photo" negotiation takes
+    # priority over everything below, same principle as onboarding above
+    # -- every reply belongs to that negotiation until it finishes or the
+    # client cancels. See app/engine/carousel.py / app/engine/image_intent.py.
+    # EXCEPT: an explicit cancel, an unambiguous global command, or
+    # (mid-image-upload only) explicitly asking for a carousel -- all read
+    # as "switch context", not an answer to the pending question, so the
+    # negotiation is dropped and the message falls through to be handled
+    # normally instead. Saying "carousel" again mid-CAROUSEL-negotiation is
+    # deliberately NOT treated as a topic switch -- that's redundant, not a
+    # switch, and could plausibly be genuine slide content.
+    if pending_carousel or pending_image_intent:
+        if intent == "CANCEL":
+            with get_session() as db:
+                convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
+                if convo:
+                    convo.pending_carousel = None
+                    convo.pending_image_intent = None
+            cancel_reply = (
+                "No worries, carousel cancelled 👍 Let me know if you'd like to try again."
+                if pending_carousel else
+                "No worries — let me know if you'd like to do something with it later 👍"
+            )
+            await send_text(msg.sender, cancel_reply)
+            return
+
+        if intent == "GLOBAL_COMMAND":
+            with get_session() as db:
+                convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
+                if convo:
+                    convo.pending_carousel = None
+                    convo.pending_image_intent = None
+            pending_carousel = None
+            pending_image_intent = None
+            # falls through to the GLOBAL_COMMAND handling below
+
+        elif pending_image_intent and intent == "CAROUSEL_REQUEST":
+            with get_session() as db:
+                convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
+                if convo:
+                    convo.pending_image_intent = None
+            pending_image_intent = None
+            # falls through to the CAROUSEL_REQUEST handling below
+
+        else:
+            if pending_carousel:
+                from app.engine import carousel
+                await carousel.advance(biz_id, msg, pending_carousel)
+                return
+            from app.engine import image_intent
+            await image_intent.advance(biz_id, msg, pending_image_intent)
+            return
+
+    # Instrumentation only, no behavior change -- logs 'user_returned_voluntarily'
+    # if it's been a while since this business's last logged event. See
+    # app/analytics.py for the heuristic (there's no real "session" concept
+    # in this app to key off instead).
+    analytics.maybe_log_voluntary_return(biz_id)
+
+    # --- A message type we genuinely can't process (voice note, video,
+    # document, sticker, location, contact card, ...) -- acknowledge
+    # instead of silently dropping it. See app/whatsapp/webhook.py's
+    # parse_message(), which used to return None here (total silence, the
+    # same failure mode the "uploaded image with no caption" bug had).
+    if msg.type == "unsupported":
+        await send_text(msg.sender, "I can only understand text messages and photos right now 🙏 Could you try one of those?")
         return
 
+    if intent == "GREETING":
+        # Personal, not generic -- addresses them by name (whatever's on
+        # file from onboarding) so a returning client feels like they're
+        # picking a conversation back up with someone who knows them, not
+        # re-introducing themselves to a form. Falls back to the old
+        # generic line only if no name was ever captured.
+        greeting = (
+            f"Hey {display_name}! How's it going? What do you want me to build today? 💡"
+            if display_name else "Hey! Want today's post? I've got an idea. 💡"
+        )
+        await send_text(msg.sender, greeting)
+        return
+
+    if intent == "IDENTITY_QUESTION":
+        with get_session() as db:
+            biz = db.query(Business).filter(Business.id == biz_id).first()
+            language = biz.preferred_language or "en"
+        reply = await i18n.t("identity_disclosure", language, persona.DISCLOSURE_TEXT)
+        await send_text(msg.sender, reply)
+        return
+
+    if intent == "GLOBAL_COMMAND":
+        command = classification.get("command")
+        if command in ("credits", "balance"):
+            bal = credits.get_balance(biz_id)
+            await send_text(msg.sender, f"💳 You have {bal} credits remaining.")
+            return
+        if command == "topup":
+            await payments.send_topup_options(biz_id, msg.sender)
+            return
+        if command == "history":
+            from app.history import send_recent_generations
+            await send_recent_generations(biz_id, msg.sender)
+            return
+        # Classifier said GLOBAL_COMMAND but didn't name which one --
+        # fail safe by falling through to the normal pipeline below
+        # rather than doing nothing.
+
     # --- Carousel request: kicks off the count/content negotiation ---
-    # Keyword-triggered by design (see app/engine/carousel.py) -- never
-    # routed through the normal concept-proposal/revision logic below.
-    if _mentions_carousel(text_lower):
+    # Never routed through the normal concept-proposal/revision logic below.
+    if intent == "CAROUSEL_REQUEST":
         from app.engine import carousel
         await carousel.start(biz_id, msg)
         return
