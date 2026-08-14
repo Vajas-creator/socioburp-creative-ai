@@ -94,6 +94,11 @@ async def fake_generate(business_id, msg):
 
 
 import app.engine.orchestrator as orch  # noqa: E402
+
+async def _fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+orch.content_policy.check = _fake_content_policy_check
 orch.generate = fake_generate
 
 

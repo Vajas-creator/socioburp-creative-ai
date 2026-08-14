@@ -69,6 +69,8 @@ from app.engine import industry_research
 from app.engine import brand_reflection
 from app.engine import image_history
 from app.engine import marketing_advisor
+from app.engine import content_policy
+from app.engine import ai_metadata
 from app import persona
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
@@ -490,6 +492,17 @@ async def generate_carousel(
     slide_count = len(slide_briefs)
     credit_cost = slide_count * CAROUSEL_CREDIT_PER_SLIDE
 
+    # Content-policy guardrail, checked once against the client's own
+    # request before any paid API call runs -- see
+    # app/engine/content_policy.py. Checked against user_message (the
+    # overall request), not each individual slide_brief -- see
+    # orchestrator._run_generation()'s equivalent check for the same
+    # single-image-pipeline reasoning.
+    policy = await content_policy.check(user_message)
+    if not policy["allowed"]:
+        await send_text(phone, f"I can't include that 🙏 {policy['reason']} No credits were charged.")
+        return
+
     reference_bytes = None
     if reference_image_url:
         try:
@@ -568,6 +581,10 @@ async def generate_carousel(
                 logo_resp = await http_client.get(ctx.logo_url)
                 if logo_resp.status_code == 200:
                     slide_image = compositor.composite_logo(slide_image, logo_resp.content)
+
+        # AI-origin metadata (IPTC Digital Source Type) -- see
+        # app/engine/ai_metadata.py.
+        slide_image = ai_metadata.embed_ai_source_metadata(slide_image)
 
         return slide_image
 
@@ -704,6 +721,10 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
         return False
 
     composited = compositor.composite_logo(base_resp.content, logo_resp.content, position=position)
+    # AI-origin metadata (IPTC Digital Source Type) -- see
+    # app/engine/ai_metadata.py. This is still an AI-generated image
+    # (the parent's stored background), just with the logo re-pasted.
+    composited = ai_metadata.embed_ai_source_metadata(composited)
 
     try:
         with get_session() as db:
@@ -774,6 +795,15 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
     alone. None for text-only requests, or when the caller couldn't
     download it (see generate()).
     """
+    # Content-policy guardrail, checked against the client's own raw
+    # words before any paid API call runs -- see app/engine/content_policy.py.
+    # Deliberately OUTSIDE the try/except below: a blocked request is an
+    # expected, handled outcome, not a pipeline failure to log as one.
+    policy = await content_policy.check(user_message)
+    if not policy["allowed"]:
+        await send_text(phone, f"I can't include that 🙏 {policy['reason']} No credits were charged.")
+        return
+
     try:
         if last_generation_id is None:
             # This business's very first-ever generation -- a one-time,
@@ -922,6 +952,11 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                 logo_resp = await http_client.get(ctx.logo_url)
                 if logo_resp.status_code == 200:
                     best_image = compositor.composite_logo(best_image, logo_resp.content)
+
+        # AI-origin metadata (IPTC Digital Source Type), applied to the
+        # actual delivered creative only -- see app/engine/ai_metadata.py
+        # for the Meta compliance requirement this satisfies.
+        best_image = ai_metadata.embed_ai_source_metadata(best_image)
 
         # --- Caption + hashtags ---
         cap = await caption_engine.generate(ctx, notes_for_caption)

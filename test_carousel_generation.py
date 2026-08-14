@@ -129,6 +129,11 @@ async def fake_router_classify(text):
 router_intent.classify = fake_router_classify
 
 from app.engine import orchestrator as orch  # noqa: E402
+
+async def _fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+orch.content_policy.check = _fake_content_policy_check
 orch.send_text = fake_send_text
 orch.send_image = fake_send_image
 orch.send_image_with_button = fake_send_image_with_button

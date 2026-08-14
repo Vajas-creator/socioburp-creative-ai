@@ -162,6 +162,11 @@ async def part_c():
         generation_calls.append((brief, trigger_source, ctx.primary_color))
 
     import app.engine.orchestrator as orch
+    
+    async def _fake_content_policy_check(text):
+        return {"allowed": True, "reason": None}
+    
+    orch.content_policy.check = _fake_content_policy_check
     orch._run_generation = fake_run_generation
 
     from app.schemas import IncomingMessage

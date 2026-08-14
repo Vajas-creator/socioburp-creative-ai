@@ -88,6 +88,11 @@ wa_client.send_text = fake_send_text
 wa_client.download_media = fake_download_media
 
 from app.engine import orchestrator as orch  # noqa: E402
+
+async def _fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+orch.content_policy.check = _fake_content_policy_check
 orch.send_text = fake_send_text
 orch.download_media = fake_download_media
 

@@ -178,6 +178,11 @@ async def test_revision_uses_resolved_reference():
     wa_client.send_image_with_button = fake_send_image_with_button
 
     from app.engine import orchestrator as orch
+    
+    async def _fake_content_policy_check(text):
+        return {"allowed": True, "reason": None}
+    
+    orch.content_policy.check = _fake_content_policy_check
     orch.send_text = fake_send_text
     orch.send_image = fake_send_image
     orch.send_image_with_button = fake_send_image_with_button
