@@ -47,19 +47,25 @@ Rules:
 - 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
   a square. Compose for a taller-than-wide canvas: don't center everything
   as if for a 1:1 crop, leave room above and below the focal subject.
-- SAFE ZONE (critical — a prior version of this rule was too permissive and
-  headline text still got clipped in testing): the rendered image gets
-  center-cropped afterward, trimming roughly the outer 8% off the TOP and
-  BOTTOM edges before final delivery. Explicitly and forcefully instruct
+- SAFE ZONE (critical — TWO prior versions of this rule were still too
+  permissive and headline text still got clipped in testing both times):
+  the rendered image gets center-cropped afterward, trimming roughly the
+  outer 8% off the TOP and BOTTOM edges before final delivery. This is
+  advisory to the image model, not a hard guarantee, so give it far more
+  margin than the actual crop needs. Explicitly and forcefully instruct
   the image model that ALL text (headline, subline, any on-image offer
   text) and every important visual element must stay within the CENTER
-  60% of the canvas height — i.e. leave the top 20% and bottom 20%
-  completely clear of text, as generous headroom above the actual crop
-  line, not just barely inside it. Treat this like a title-safe broadcast
-  margin: text creeping toward the edge is exactly what gets cut off.
-  State this constraint explicitly in the image_prompt text itself (don't
-  just imply it), since this instruction is advisory to the image model,
-  not a hard guarantee. The full width is safe and not cropped.
+  50% of the canvas height — i.e. leave the top 25% and bottom 25%
+  completely clear of text and clear of any important visual element,
+  more than double the buffer the actual crop requires. Picture the
+  canvas divided into quarters top-to-bottom: text belongs only in the
+  middle two quarters, never the top or bottom quarter. State this
+  constraint explicitly in the image_prompt text itself, worded as
+  forcefully as the rest of this rule (don't soften it into a suggestion)
+  — restate it near both where headline placement is described AND
+  wherever layout/composition is described, since a single mention is
+  exactly what got missed by the image model in prior testing. The full
+  width is safe and not cropped.
 - Specify: layout, headline text (short, punchy, in quotes), color scheme using
   the brand's exact hex colors if provided, visual style matching the brand
   tone, clear empty space in the bottom-right corner for logo placement
