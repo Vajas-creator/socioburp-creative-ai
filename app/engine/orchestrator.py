@@ -67,6 +67,7 @@ from app.engine import quality
 from app.engine import learning
 from app.engine import industry_research
 from app.engine import brand_reflection
+from app.engine import image_history
 from app import persona
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
@@ -602,6 +603,15 @@ async def generate_carousel(
             if convo:
                 convo.last_generation_id = generation_id
 
+        # Recorded as ONE entry (the whole carousel isn't individually
+        # revisable yet -- see generate()'s last_generation_is_carousel
+        # guard -- so per-slide resolution isn't needed here). See
+        # app/engine/image_history.py.
+        image_history.record_image(
+            business_id, "generated", image_urls[0],
+            f"{slide_count}-slide carousel: {user_message}" if slide_count > 1 else user_message,
+        )
+
         charge_for_generation(business_id, generation_id, amount=credit_cost)
 
         balance = get_balance(business_id)
@@ -766,10 +776,28 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
 
         # --- Build the image prompt ---
         if is_revision:
-            with get_session() as db:
-                parent = db.query(Generation).filter(Generation.id == last_generation_id).first()
-                base_prompt = parent.built_prompt if parent else None
-                parent_image_url = (parent.base_image_url or parent.image_url) if parent else None
+            # If there's genuine ambiguity in the recent image history
+            # (2+ images -- uploaded photos AND generated creatives, see
+            # app/engine/image_history.py), a reference like "change THAT
+            # background" or "use the second one" is resolved against it
+            # first. A freshly attached photo (reference_image already
+            # set) always takes priority over any resolution -- that's
+            # the client pointing at something new, not referring back.
+            # Falls back to today's "most recent generation" default
+            # (last_generation_id) whenever there's nothing to
+            # disambiguate, unchanged from before this existed.
+            referenced = None
+            if reference_image is None:
+                referenced = await image_history.resolve_reference(business_id, user_message)
+
+            if referenced:
+                parent_image_url = referenced["url"]
+                base_prompt = referenced["label"] or None
+            else:
+                with get_session() as db:
+                    parent = db.query(Generation).filter(Generation.id == last_generation_id).first()
+                    base_prompt = parent.built_prompt if parent else None
+                    parent_image_url = (parent.base_image_url or parent.image_url) if parent else None
 
             if base_prompt:
                 built = await prompt_builder.build(
@@ -922,6 +950,11 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
 
             convo = db.query(ConversationState).filter(ConversationState.business_id == business_id).first()
             convo.last_generation_id = generation_id
+
+        # See app/engine/image_history.py -- lets a LATER "use the second
+        # one" reference this generation even after something else becomes
+        # the most recent.
+        image_history.record_image(business_id, "generated", image_url, user_message)
 
         # --- Charge AFTER success, never before ---
         charge_for_generation(business_id, generation_id, amount=1)
