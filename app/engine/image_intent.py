@@ -30,7 +30,7 @@ from app.storage import upload_reference_image, upload_creative
 from app.engine.context import load_business_context
 from app.engine import image_gen, compositor, caption as caption_engine, learning, image_history
 from app.config import settings
-from app import credits, payments
+from app import credits, payments, allowlist
 
 logger = logging.getLogger("socioburp.engine.image_intent")
 
@@ -163,7 +163,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str
 
 
 async def _generate_from_instruction(business_id: uuid.UUID, phone: str, reference_image_url: str | None, instruction: str):
-    if credits.get_balance(business_id) < 1:
+    if not allowlist.has_unlimited_access(phone) and credits.get_balance(business_id) < 1:
         await payments.send_topup_options(business_id, phone, prefix="You're out of credits! 🙏 ")
         return
 
@@ -207,7 +207,8 @@ async def _use_as_is(business_id: uuid.UUID, phone: str, reference_image_url: st
         await send_text(phone, "Hmm, I don't have that photo anymore 🙏 Could you send it again?")
         return
 
-    if credits.get_balance(business_id) < 1:
+    unlimited = allowlist.has_unlimited_access(phone)
+    if not unlimited and credits.get_balance(business_id) < 1:
         await payments.send_topup_options(business_id, phone, prefix="You're out of credits! 🙏 ")
         return
 
@@ -261,7 +262,8 @@ async def _use_as_is(business_id: uuid.UUID, phone: str, reference_image_url: st
 
         image_history.record_image(business_id, "generated", image_url, "the uploaded photo, posted as-is")
 
-        credits.charge_for_generation(business_id, generation_id, amount=1)
+        if not unlimited:
+            credits.charge_for_generation(business_id, generation_id, amount=1)
         balance = credits.get_balance(business_id)
         low_balance_note = (
             f"\n\n⚠️ Only {balance} credits left. Reply *topup* to recharge."
