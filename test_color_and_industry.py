@@ -202,8 +202,12 @@ async def part_c():
     sent.clear()
     generation_calls.clear()
     result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="image", media_id="fake_media_123"))
-    assert state() == "done", f"FAIL: {state()}"
+    assert state() == "awaiting_brand_details", f"FAIL: {state()}"
     assert colors() == ("#1A1A2E", "#EAB308"), f"FAIL: expected extracted colors applied directly (no confirm step), got {colors()}"
+    assert result is None, "FAIL: onboarding shouldn't complete yet -- the brand-details question is still pending"
+
+    result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
+    assert state() == "done", f"FAIL: {state()}"
     assert result is not None, "FAIL: expected advance() to return (ctx, brief) once onboarding completes"
     ctx, brief = result
     # advance() no longer calls _run_generation() itself (see its
@@ -229,7 +233,8 @@ async def part_c():
         db.add(BrandProfile(business_id=biz2_id))
 
     generation_calls.clear()
-    result2 = await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="instagram.com/testrestaurant"))
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="instagram.com/testrestaurant"))
+    result2 = await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))
     with get_session() as db:
         biz2_row = db.query(Business).filter(Business.id == biz2_id).first()
         profile2 = db.query(BrandProfile).filter(BrandProfile.business_id == biz2_id).first()

@@ -178,6 +178,7 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             logo_url=profile.logo_url if profile else None,
             learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
             style_summary=(profile.extras or {}).get("style_summary") if profile else None,
+            positioning_notes=(profile.extras or {}).get("positioning_notes") if profile else None,
             language=business.preferred_language or "en",
             industry_style=industry_research.get_cached_style(business.industry),
             instagram_handle=business.instagram_handle,

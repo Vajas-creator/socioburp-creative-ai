@@ -160,6 +160,8 @@ def _summarize_context(ctx: BusinessContext) -> str:
         lines.append(f"Secondary color: {ctx.secondary_color}")
     if ctx.target_audience:
         lines.append(f"Target audience: {ctx.target_audience}")
+    if ctx.positioning_notes:
+        lines.append(f"Price positioning / style dos-and-don'ts (client-stated, honor explicitly): {ctx.positioning_notes}")
     if ctx.website:
         lines.append(f"Website: {ctx.website}")
     if ctx.contact_phone:

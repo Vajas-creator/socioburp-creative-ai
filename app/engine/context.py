@@ -24,6 +24,7 @@ class BusinessContext:
     logo_url: str | None = None
     learned_preferences: list[str] = field(default_factory=list)  # past accepted requests, for style/direction reference
     style_summary: str | None = None  # distilled synthesis once learned_preferences has cycled a few times
+    positioning_notes: str | None = None  # price range/positioning + style dos-and-don'ts, from onboarding's "awaiting_brand_details" question -- see app/engine/brand_reflection.py's extract_brand_details()
     language: str = "en"  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml' — see app/i18n.py
     industry_style: str | None = None  # cached industry-wide trend research, see app/engine/industry_research.py
     instagram_handle: str | None = None  # whatever the client typed when asked for their Instagram page
@@ -72,6 +73,7 @@ async def load_business_context(business_id):
             logo_url=profile.logo_url if profile else None,
             learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
             style_summary=(profile.extras or {}).get("style_summary") if profile else None,
+            positioning_notes=(profile.extras or {}).get("positioning_notes") if profile else None,
             language=business.preferred_language or "en",
             industry_style=industry_research.get_cached_style(business.industry),
             instagram_handle=business.instagram_handle,

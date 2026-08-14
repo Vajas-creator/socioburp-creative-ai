@@ -184,7 +184,8 @@ async def run():
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="hi"))
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # owner-name question
     await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="I run a bakery"))
-    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # instagram question
+    await onboarding.advance(biz2_id, IncomingMessage(sender=phone2, type="text", text="skip"))  # brand-details question
 
     completed = events_for(biz2_id, "onboarding_completed")
     assert len(completed) == 1, f"FAIL: expected exactly 1 onboarding_completed event, got {len(completed)}"

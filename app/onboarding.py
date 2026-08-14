@@ -3,7 +3,20 @@ Onboarding state machine. Persisted on the Business row so a client can go
 silent mid-flow and resume later without losing progress.
 
 States: new -> awaiting_owner_name -> awaiting_business_description ->
-awaiting_instagram -> done
+awaiting_instagram -> awaiting_brand_details -> done
+
+awaiting_brand_details (added Aug 2026): one more optional, open-ended
+question -- brand colors, price range/positioning, and any style dos/
+don'ts, all in a single message rather than three separate questions
+(keeps the "2-3 lines max, one question at a time" rule intact while
+still capturing what generation was missing). Extracted via Claude (see
+app/engine/brand_reflection.py's extract_brand_details()) into
+BrandProfile.primary_color/secondary_color (only if not already set from
+an Instagram screenshot -- see the awaiting_instagram state below) and
+BrandProfile.extras["positioning_notes"] (read into BusinessContext.positioning_notes,
+which prompt_builder.py now weaves into every generation). Same
+optional-never-blocks pattern as owner name and Instagram: a skip/decline
+or empty reply proceeds straight to "done" with nothing captured.
 
 awaiting_owner_name (added Aug 2026): asks the client's own name, once,
 right after the welcome message -- purely for personalization (see
@@ -67,6 +80,7 @@ LANGUAGE_OVERRIDE_KEYWORDS = {
 
 INSTAGRAM_SKIP_WORDS = ("skip", "no", "none", "don't have one", "dont have one", "n/a", "na")
 NAME_SKIP_WORDS = ("skip", "no", "none", "n/a", "na", "prefer not to say", "rather not say")
+BRAND_DETAILS_SKIP_WORDS = ("skip", "no", "none", "n/a", "na", "nothing")
 
 # A short pause between the welcome message and the first real question --
 # staged, conversational pacing rather than a wall of text at once. Module
@@ -238,6 +252,33 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
             # business-description question, this one never blocks
             # onboarding completion.
 
+            ask_brand_details = await i18n.t(
+                "ask_brand_details", language,
+                "Last thing — any brand colors, price range, or style dos/don'ts I should know? "
+                "(e.g. \"premium pricing, warm gold tones, never use pink\") Or just say \"skip\".",
+            )
+            await send_text(phone, ask_brand_details)
+            biz.onboarding_state = "awaiting_brand_details"
+            return
+
+        if state == "awaiting_brand_details":
+            if text_lower not in BRAND_DETAILS_SKIP_WORDS and msg.text and msg.text.strip():
+                details = await brand_reflection.extract_brand_details(msg.text.strip())
+                # Only fill colors if a screenshot (awaiting_instagram, above)
+                # didn't already extract real ones -- that's genuine visual
+                # signal, this is the client's own words, and the screenshot
+                # should win if both are present.
+                if details["primary_color"] and not profile.primary_color:
+                    profile.primary_color = details["primary_color"]
+                if details["secondary_color"] and not profile.secondary_color:
+                    profile.secondary_color = details["secondary_color"]
+                if details["positioning_notes"]:
+                    extras = dict(profile.extras or {})
+                    extras["positioning_notes"] = details["positioning_notes"]
+                    profile.extras = extras
+            # A skip/decline or empty reply: proceed anyway -- same
+            # optional, never-blocks pattern as owner name and Instagram.
+
             biz.onboarding_state = "done"
 
             from app.credits import add_credits
@@ -263,6 +304,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage):
                 primary_color=profile.primary_color,
                 secondary_color=profile.secondary_color,
                 target_audience=profile.target_audience,
+                positioning_notes=(profile.extras or {}).get("positioning_notes"),
                 language=language,
                 industry_style=industry_research.get_cached_style(biz.industry),
                 instagram_handle=biz.instagram_handle,

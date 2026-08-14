@@ -147,6 +147,7 @@ async def _complete_rest_of_onboarding(biz_id, phone):
     """
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="I run a small bakery"))
+    await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     result = await onboarding.advance(biz_id, IncomingMessage(sender=phone, type="text", text="skip"))
     if result is not None:
         ctx, brief = result
