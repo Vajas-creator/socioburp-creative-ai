@@ -71,7 +71,7 @@ from app.engine import image_history
 from app.engine import marketing_advisor
 from app.engine import content_policy
 from app.engine import ai_metadata
-from app import persona, allowlist
+from app import persona, allowlist, alerting
 
 logger = logging.getLogger("socioburp.engine.orchestrator")
 
@@ -681,8 +681,12 @@ async def generate_carousel(
             + f"💳 Credits left: {balance}{low_balance_note}",
         )
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Carousel generation failed for business=%s", business_id)
+        await alerting.send_alert(
+            "carousel_generation_failed",
+            f"Carousel generation failed for business={business_id}: {exc!r}",
+        )
         await send_text(
             phone,
             "Something went wrong creating your carousel 🙏 No credits were charged. Please try again.",
@@ -895,6 +899,10 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         candidates = await image_gen.generate_images(image_prompt, count=2, reference_image=reference_image)
 
         if not candidates:
+            await alerting.send_alert(
+                "generation_no_candidates",
+                f"image_gen.generate_images() returned no candidates for business={business_id}",
+            )
             await send_text(
                 phone,
                 "Hmm, the design generation hit a snag 🙏 No credits were charged — please try again.",
@@ -1033,8 +1041,12 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             f"💳 Credits left: {balance}{low_balance_note}",
         )
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Generation failed for business=%s", business_id)
+        await alerting.send_alert(
+            "generation_failed",
+            f"Generation failed for business={business_id}: {exc!r}",
+        )
         await send_text(
             phone,
             "Something went wrong creating your design 🙏 No credits were charged. Please try again.",
