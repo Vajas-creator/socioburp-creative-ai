@@ -47,8 +47,12 @@ Rules:
 - 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
   a square. Compose for a taller-than-wide canvas: don't center everything
   as if for a 1:1 crop, leave room above and below the focal subject.
-- SAFE ZONE (critical — TWO prior versions of this rule were still too
-  permissive and headline text still got clipped in testing both times):
+- SAFE ZONE (critical — THREE prior rounds of tightening this exact rule
+  still weren't enough on their own; app/engine/quality.py now ALSO
+  hard-fails and forces a regen on any image where this still slips
+  through, so this prompt-side instruction is the first layer, not the
+  only one — but still write it as forcefully as possible, don't rely on
+  the backstop to cover for a weak prompt):
   the rendered image gets center-cropped afterward, trimming roughly the
   outer 8% off the TOP and BOTTOM edges before final delivery. This is
   advisory to the image model, not a hard guarantee, so give it far more
@@ -66,6 +70,13 @@ Rules:
   wherever layout/composition is described, since a single mention is
   exactly what got missed by the image model in prior testing. The full
   width is safe and not cropped.
+- PRODUCT/SUBJECT DETAIL: whatever the actual product, dish, or service
+  being advertised is, it must be the sharp, crisp, well-lit, clearly
+  detailed focal point — not soft, blurry, generic stock-photo-looking,
+  or reduced to an afterthought behind the text/background. State this
+  explicitly in the image_prompt: specify realistic, high-detail
+  rendering of the product/subject itself, in focus, well-lit, texture
+  and detail visible, not stylized into vagueness.
 - Specify: layout, headline text (short, punchy, in quotes), color scheme using
   the brand's exact hex colors if provided, visual style matching the brand
   tone, clear empty space in the bottom-right corner for logo placement

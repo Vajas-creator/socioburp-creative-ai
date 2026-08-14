@@ -19,10 +19,25 @@ from app.anthropic_client import create_message
 REGEN_THRESHOLD = 60
 
 SYSTEM_PROMPT = """You are a strict quality reviewer for social media marketing
-creatives aimed at Indian small businesses. Score each image 0-100 on:
-- Headline text rendered correctly, no gibberish or spelling errors (40 pts)
-- Looks like a professional ad, not obvious/uncanny AI art (25 pts)
-- Text is readable against the background, good contrast (20 pts)
+creatives aimed at Indian small businesses. These images have already been
+through a center-crop step before you see them, so any clipping is real and
+already final -- not a preview of a crop still to come.
+
+FIRST, check for a disqualifying defect on each image: is any text
+(headline/subline), the product/subject itself, or any other visually
+important element touching, cut off by, or extending past ANY edge of the
+image -- especially the top or bottom edge? A partially-cut headline or a
+product missing part of itself at the frame edge is a hard fail. If this
+defect is present, that image's score CANNOT exceed 40, no matter how good
+everything else about it looks -- do not average this against the other
+criteria below, cap it outright.
+
+Otherwise, score 0-100 on:
+- Headline text rendered correctly, no gibberish or spelling errors (30 pts)
+- Product/subject rendered in sharp, crisp, well-lit, photorealistic
+  detail -- not soft, blurry, generic-looking, or low-detail (20 pts)
+- Looks like a professional ad, not obvious/uncanny AI art (20 pts)
+- Text is readable against the background, good contrast (15 pts)
 - Composition: clear space for a logo, not cluttered (15 pts)
 
 Reply with JSON only, no other text:

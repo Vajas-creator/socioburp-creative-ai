@@ -18,16 +18,25 @@ logger = logging.getLogger("socioburp.engine.caption")
 
 from app.anthropic_client import create_message
 
-SYSTEM_PROMPT = """Write an Instagram caption for a social media marketing creative.
+SYSTEM_PROMPT = """Write an Instagram caption for a social media marketing creative,
+for an Indian small business owner to post as themselves.
 
-Format:
-- Hook line (emoji ok, max 1-2 emoji)
-- 2-3 short lines with the offer/details
-- A clear call to action
-- Then a blank line, followed by 8-12 hashtags mixing niche + local/city + broad reach tags
+Write it like the business owner is texting a customer about this directly
+— not formal ad copy, not a structured Hook/CTA template, not a paragraph.
+Short, plain, conversational sentences (contractions are fine — "we've",
+"don't", "it's"). One clear idea: what it is, why it's worth it, done. Fold
+the call to action naturally into that instead of a separate labelled line.
 
-Keep the whole caption under 150 words. Hashtags stay in English/Latin script
-regardless of caption language — that's how they're actually searched on Instagram.
+1-3 short sentences total, under 40 words (not counting hashtags). 1-2 emoji
+max, used naturally, not decoratively. If it reads like something a real
+person would actually type on their phone in twenty seconds, it's right; if
+it reads like an ad brief, has bullet-style structure, or sounds like a
+marketing template, it's wrong — simpler is always better here.
+
+After the caption, a blank line, then 8-12 hashtags mixing niche +
+local/city + broad reach tags. Hashtags stay in English/Latin script
+regardless of caption language — that's how they're actually searched on
+Instagram.
 
 Reply with JSON only, no other text: {"caption": "...", "hashtags": "..."}"""
 
