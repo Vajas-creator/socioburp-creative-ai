@@ -95,6 +95,11 @@ async def test_orchestrator_integration():
 
     orch.intent_engine.classify = fake_classify
 
+    async def fake_classify_scope(text):
+        return "UNCLEAR"
+
+    orch.marketing_advisor.classify_scope = fake_classify_scope
+
     from app.db import get_session
     from app.models import Business
     from app.schemas import IncomingMessage
