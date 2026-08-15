@@ -112,6 +112,8 @@ def test_agentic_beta_membership():
     print("TEST 1: agentic_beta.is_enabled() membership check")
     print("=" * 60)
     assert agentic_beta.is_enabled(TEST_PHONE) is True
+    for phone in ("918826226623", "919871583289", "919818304622"):
+        assert agentic_beta.is_enabled(phone) is True, f"FAIL: expected {phone} to be in the beta"
     assert agentic_beta.is_enabled(NORMAL_PHONE) is False
     print("PASS\n")
 
