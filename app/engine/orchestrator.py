@@ -64,6 +64,7 @@ from app.engine import image_gen
 from app.engine import compositor
 from app.engine import caption as caption_engine
 from app.engine import quality
+from app.engine import text_overlay
 from app.engine import learning
 from app.engine import industry_research
 from app.engine import brand_reflection
@@ -590,6 +591,16 @@ async def generate_carousel(
                     scored = retry_scored
 
         slide_image = candidates[scored["best_index"]]
+
+        # Real, code-rendered headline text (Aug 2026) -- the image itself
+        # was generated with NO text baked in (see prompt_builder.py's "NO
+        # TEXT" rule); this composites the actual headline on top now,
+        # deterministically, before the logo goes on. See
+        # app/engine/text_overlay.py's module docstring for why.
+        headline_text = built.get("headline_text")
+        if headline_text:
+            slide_image = await text_overlay.composite_headline(slide_image, headline_text, language=ctx.language)
+
         if ctx.has_logo:
             async with httpx.AsyncClient(timeout=15.0) as http_client:
                 logo_resp = await http_client.get(ctx.logo_url)
@@ -979,7 +990,17 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                     scored = retry_scored
 
         best_image = candidates[scored["best_index"]]
-        base_image = best_image  # pre-composite background, kept for free logo-move revisions
+
+        # Real, code-rendered headline text (Aug 2026) -- the image itself
+        # was generated with NO text baked in (see prompt_builder.py's "NO
+        # TEXT" rule); this composites the actual headline on top now,
+        # deterministically, before the logo goes on. See
+        # app/engine/text_overlay.py's module docstring for why.
+        headline_text = built.get("headline_text")
+        if headline_text:
+            best_image = await text_overlay.composite_headline(best_image, headline_text, language=ctx.language)
+
+        base_image = best_image  # pre-logo-composite (background + headline), kept for free logo-move revisions
 
         # --- Composite logo if present ---
         if ctx.has_logo:
