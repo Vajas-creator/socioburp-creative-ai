@@ -84,26 +84,43 @@ Rules:
   general area, not to place the logo yourself). Do NOT mention headline
   text, a subline, or any words at all in image_prompt — see the NO TEXT
   rule above.
-- headline_text (separate JSON field, NOT part of image_prompt): a short,
-  punchy headline — think "how a real person would text it", not ad copy —
-  MAXIMUM 6 words, optional short subline folded in if it fits naturally.
-  This gets rendered afterward as real, crisp text by a separate
-  deterministic compositing step (app/engine/text_overlay.py), not by the
-  image model, so there's no risk of it coming out garbled or cut off —
-  keep it punchy because that's better marketing copy, not because of any
-  rendering limit.
+- headline_text / subtext_text / cta_text (three separate JSON fields, NOT
+  part of image_prompt — this is the ENTIRE set of on-image text this
+  request can ever have, since the image itself has none):
+    - headline_text (required): the bold, dominant line — short and
+      punchy, think "how a real person would text it", not ad copy —
+      MAXIMUM 6 words.
+    - subtext_text (optional, "" if not needed): one small supporting
+      line beneath the headline — a short explanatory phrase, MAXIMUM
+      ~12 words. Only include this if the request actually calls for
+      supporting text (e.g. "with a small subtext line", "add a tagline
+      under it") or the business profile's tone clearly benefits from
+      one — don't invent one for a simple request that only needs a
+      headline.
+    - cta_text (optional, "" if not needed): one even smaller line for a
+      call-to-action, website, contact detail, or offer specifics
+      explicitly requested to appear ON the image (e.g. "add the website
+      at the bottom", "put a 25% off overlay on it", "add DM us to get
+      started"). MAXIMUM ~8 words. Leave "" unless the request or profile
+      explicitly calls for this.
+  All three get rendered afterward as real, crisp text by a separate
+  deterministic compositing step (app/engine/text_overlay.py), stacked
+  headline-then-subtext-then-cta, not painted by the image model, so
+  there's no risk of any of them coming out garbled or cut off — keep
+  each one short because that's better marketing copy and better visual
+  hierarchy, not because of any rendering limit.
 - If a target language other than English is specified below, write
-  headline_text itself IN THAT LANGUAGE'S SCRIPT (e.g. actual Devanagari
-  for Hindi, actual Tamil script for Tamil) — not transliterated into
-  Latin letters, and not translated-then-romanized.
+  headline_text/subtext_text/cta_text themselves IN THAT LANGUAGE'S
+  SCRIPT (e.g. actual Devanagari for Hindi, actual Tamil script for
+  Tamil) — not transliterated into Latin letters, and not
+  translated-then-romanized.
 - Offer details (discount %, dates, phone numbers) go in the CAPTION by
-  default, not into headline_text — UNLESS the user's request explicitly
-  asks for that detail to appear ON the image (e.g. "put a 25% off overlay
-  on it", "add the discount as text on the image"). In that case, honor
-  it: fold that specific detail into headline_text instead (still within
-  the 6-word-ish spirit of a punchy headline) rather than silently
-  routing it to the caption. An explicit instruction always wins over the
-  default.
+  default, not on the image — UNLESS the user's request explicitly asks
+  for that detail to appear ON the image (e.g. "put a 25% off overlay on
+  it", "add the discount as text on the image"). In that case, honor it:
+  fold that specific detail into cta_text (or headline_text if it's the
+  dominant point of the creative) rather than silently routing it to the
+  caption. An explicit instruction always wins over the default.
 - Never include a false or unverifiable claim as if it were fact (a
   specific certification/award/ranking the business hasn't stated they
   have), a medical/treatment claim, a financial guarantee, or restricted-
@@ -127,18 +144,20 @@ Rules:
   or repeat their captions verbatim on the image.
 
 Reply with JSON only, no other text:
-{"image_prompt": "...", "headline_text": "...", "notes_for_caption": "..."}"""
+{"image_prompt": "...", "headline_text": "...", "subtext_text": "", "cta_text": "", "notes_for_caption": "..."}"""
 
 
 async def build(ctx: BusinessContext, user_brief: str) -> dict:
     """
-    Returns {"image_prompt": str, "headline_text": str, "notes_for_caption": str}
+    Returns {"image_prompt": str, "headline_text": str, "subtext_text": str,
+    "cta_text": str, "notes_for_caption": str}. subtext_text/cta_text are
+    "" when the request doesn't call for them.
     """
     profile_summary = _summarize_context(ctx)
 
     user_content = f"Business profile:\n{profile_summary}\n\nUser's request: {user_brief}"
     if ctx.language and ctx.language != "en" and ctx.language in LANGUAGE_NAMES:
-        user_content += f"\n\nTarget language for on-image headline text: {LANGUAGE_NAMES[ctx.language]}"
+        user_content += f"\n\nTarget language for on-image text: {LANGUAGE_NAMES[ctx.language]}"
 
     try:
         response = await create_message(
@@ -150,11 +169,13 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
             # production symptom: json.loads() failing with "Unterminated
             # string" across many unrelated briefs -- the response was
             # being cut off mid-string before the JSON ever closed, not a
-            # one-off content quirk. 1400 gives real headroom instead of
-            # being right at the edge of what a maximally-detailed prompt
-            # (long safe-zone restatement x2 + product detail + layout +
-            # cultural context + headline + notes_for_caption) needs.
-            max_tokens=1400,
+            # one-off content quirk. Bumped again to 1500 when subtext_text/
+            # cta_text were added alongside headline_text (small on their
+            # own, but real revision briefs can be very long -- see the
+            # "Revise this existing creative concept" incident where a
+            # 3-slide carousel's full prior description got concatenated
+            # into one user_brief).
+            max_tokens=1500,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_content}],
         )
@@ -165,6 +186,8 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
         for key in ("image_prompt", "headline_text", "notes_for_caption"):
             if key not in parsed:
                 raise ValueError(f"Missing key '{key}' in prompt builder output")
+        parsed.setdefault("subtext_text", "")
+        parsed.setdefault("cta_text", "")
 
         return parsed
 
@@ -177,6 +200,8 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
                 f"business, 1229x1536 portrait format, modern design, based on this request: {user_brief}"
             ),
             "headline_text": user_brief[:40],
+            "subtext_text": "",
+            "cta_text": "",
             "notes_for_caption": user_brief,
         }
 

@@ -56,18 +56,21 @@ _DEFAULT_FONT_FILES = ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf")
 
 MARGIN = 24
 
-CHOOSE_BOX_SYSTEM_PROMPT = """You are laying out a headline for a
-marketing creative. You'll see the finished background photo/design
-(with NO text on it yet) and the exact headline text that needs to go
-somewhere on it.
+CHOOSE_BOX_SYSTEM_PROMPT = """You are laying out text for a marketing
+creative. You'll see the finished background photo/design (with NO text
+on it yet) and the exact text content that needs to go somewhere on it --
+this may be just a headline, or a headline plus one or two smaller
+supporting lines (a subtext line, a CTA/website/contact line) stacked
+underneath it.
 
-Pick a rectangular region (x, y = top-left corner, width, height) for the
-headline that:
+Pick a rectangular region (x, y = top-left corner, width, height) that:
 - Sits on relatively plain/uncluttered background, not covering the
   main product/subject or any other important visual element.
-- Is wide and tall enough to comfortably fit the given text at a large,
-  confident, easily-readable size (err on the generous side -- a bit
-  more room is better than text that has to shrink tiny to fit).
+- Is wide and tall enough to comfortably fit ALL of the given text
+  lines stacked vertically, the headline at a large confident size and
+  any supporting lines beneath it at smaller sizes (err on the generous
+  side -- a bit more room is better than text that has to shrink tiny to
+  fit; more lines of text need a taller box, not just a wider one).
 - Makes sense compositionally (usually the lower third or upper third of
   a portrait image, but use real judgment about this specific image).
 
@@ -117,6 +120,23 @@ async def choose_text_box(image_bytes: bytes, image_w: int, image_h: int, headli
         return fallback
 
 
+def _wrap_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, box_w: int) -> list[str]:
+    """Greedy word-wrap of `text` to fit `box_w` at the given font. Never drops a word."""
+    words = text.split()
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if draw.textlength(candidate, font=font) <= box_w:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
 def _wrap_and_fit(draw: ImageDraw.ImageDraw, text: str, font_path: str, box_w: int, box_h: int) -> tuple[ImageFont.FreeTypeFont, list[str]]:
     """
     Finds the largest font size (within a sane range) at which `text`,
@@ -127,18 +147,7 @@ def _wrap_and_fit(draw: ImageDraw.ImageDraw, text: str, font_path: str, box_w: i
     """
     for size in range(96, 15, -4):
         font = ImageFont.truetype(font_path, size)
-        words = text.split()
-        lines, current = [], ""
-        for word in words:
-            candidate = f"{current} {word}".strip()
-            if draw.textlength(candidate, font=font) <= box_w:
-                current = candidate
-            else:
-                if current:
-                    lines.append(current)
-                current = word
-        if current:
-            lines.append(current)
+        lines = _wrap_lines(draw, text, font, box_w)
 
         line_height = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
         total_height = line_height * len(lines) * 1.25
@@ -152,24 +161,120 @@ def _wrap_and_fit(draw: ImageDraw.ImageDraw, text: str, font_path: str, box_w: i
     return font, [text]
 
 
-async def composite_headline(image_bytes: bytes, headline: str, language: str | None = None) -> bytes:
+# Aug 2026 "multiple text elements per slide" follow-up: a real brief asked
+# for a bold headline PLUS a smaller subtext line PLUS a small CTA/website
+# line, all on the same image -- composite_headline() below only ever
+# rendered a single headline, so the rest of that text was silently
+# dropped (worse: the image model was explicitly forbidden from painting
+# ANY text per prompt_builder.py's "NO TEXT" rule, so the extra content
+# just vanished with no error). _fit_text_blocks() extends the same
+# never-drop-text, shrink-to-fit philosophy to up to three stacked blocks
+# of decreasing visual weight instead of just one.
+_SUBTEXT_SIZE_RATIO = 0.45
+_CTA_SIZE_RATIO = 0.32
+_MIN_SUBTEXT_SIZE = 14
+_MIN_CTA_SIZE = 12
+_BLOCK_GAP_RATIO = 0.4  # vertical gap after a block, relative to that block's own font size
+
+
+def _fit_text_blocks(
+    draw: ImageDraw.ImageDraw,
+    headline: str,
+    subtext: str | None,
+    cta_text: str | None,
+    bold_font_path: str,
+    regular_font_path: str,
+    box_w: int,
+    box_h: int,
+) -> list[dict]:
     """
-    Composites `headline` onto the image as real, crisp text with a
-    semi-transparent scrim behind it for guaranteed legibility. Returns
-    PNG bytes. If anything goes wrong, returns the original image
-    unmodified rather than failing the whole generation -- same
-    fail-safe pattern as compositor.py's composite_logo().
+    Like _wrap_and_fit(), but for up to three stacked blocks (headline,
+    optional subtext, optional cta) at once: headline in bold at the
+    largest size, subtext/cta in regular weight at proportionally smaller
+    sizes (subtext ~45% of headline size, cta ~32%), all shrunk together
+    until the whole stack fits box_h, or the size floor is hit -- same
+    guarantee as _wrap_and_fit: text is never dropped, only shrunk.
+
+    Returns a list of dicts: {"lines": [...], "font": ImageFont, "color":
+    (r,g,b,a), "line_spacing": int, "block_height": int, "block_gap": int}
+    in top-to-bottom drawing order.
+    """
+    specs = [("headline", headline, bold_font_path, (255, 255, 255, 255))]
+    if subtext and subtext.strip():
+        specs.append(("subtext", subtext.strip(), regular_font_path, (255, 255, 255, 235)))
+    if cta_text and cta_text.strip():
+        specs.append(("cta", cta_text.strip(), regular_font_path, (255, 255, 255, 200)))
+
+    last_attempt = None
+    for headline_size in range(80, 15, -4):
+        sizes = {
+            "headline": headline_size,
+            "subtext": max(_MIN_SUBTEXT_SIZE, round(headline_size * _SUBTEXT_SIZE_RATIO)),
+            "cta": max(_MIN_CTA_SIZE, round(headline_size * _CTA_SIZE_RATIO)),
+        }
+
+        blocks = []
+        total_height = 0
+        fits = True
+        for name, text, font_path, color in specs:
+            size = sizes[name]
+            font = ImageFont.truetype(font_path, size)
+            lines = _wrap_lines(draw, text, font, box_w)
+            line_height = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
+            line_spacing = int(line_height * 1.2)
+            block_height = line_spacing * len(lines)
+            gap = int(size * _BLOCK_GAP_RATIO)
+            widest = max((draw.textlength(line, font=font) for line in lines), default=0)
+            if widest > box_w:
+                fits = False
+            blocks.append({
+                "lines": lines, "font": font, "color": color,
+                "line_spacing": line_spacing, "block_height": block_height, "block_gap": gap,
+            })
+            total_height += block_height + gap
+
+        total_height -= blocks[-1]["block_gap"]  # no trailing gap after the last block
+        last_attempt = blocks
+        if fits and total_height <= box_h:
+            return blocks
+
+    # Nothing fit even at the size floor -- use the smallest attempt
+    # anyway, best-effort. Never silently drop a block.
+    return last_attempt
+
+
+async def composite_headline(
+    image_bytes: bytes,
+    headline: str,
+    subtext: str | None = None,
+    cta_text: str | None = None,
+    language: str | None = None,
+) -> bytes:
+    """
+    Composites `headline` -- and, if given, a smaller `subtext` line and an
+    even smaller `cta_text` line stacked beneath it -- onto the image as
+    real, crisp text with a semi-transparent scrim behind the whole stack
+    for guaranteed legibility. Returns PNG bytes. If anything goes wrong,
+    returns the original image unmodified rather than failing the whole
+    generation -- same fail-safe pattern as compositor.py's
+    composite_logo().
+
+    subtext/cta_text are optional (Aug 2026 "headline + subtext + CTA"
+    follow-up) -- a request that only needs a single headline behaves
+    exactly as before.
     """
     if not headline or not headline.strip():
         return image_bytes
 
     try:
         base = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-        box = await choose_text_box(image_bytes, base.width, base.height, headline)
+        combined_text = "\n".join(t.strip() for t in (headline, subtext, cta_text) if t and t.strip())
+        box = await choose_text_box(image_bytes, base.width, base.height, combined_text)
         x, y, w, h = box
 
-        _, bold_file = _font_files_for_language(language)
-        font_path = os.path.join(_FONTS_DIR, bold_file)
+        reg_file, bold_file = _font_files_for_language(language)
+        bold_path = os.path.join(_FONTS_DIR, bold_file)
+        reg_path = os.path.join(_FONTS_DIR, reg_file)
 
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
@@ -177,25 +282,26 @@ async def composite_headline(image_bytes: bytes, headline: str, language: str | 
         # Leave a little internal padding within the chosen box so the
         # scrim doesn't hug the text too tightly.
         pad = 20
-        font, lines = _wrap_and_fit(draw, headline.strip(), font_path, max(10, w - 2 * pad), max(10, h - 2 * pad))
-
-        line_height = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
-        line_spacing = int(line_height * 1.25)
-        text_block_height = line_spacing * len(lines)
-        widest_line = max((draw.textlength(line, font=font) for line in lines), default=0)
+        blocks = _fit_text_blocks(
+            draw, headline.strip(), subtext, cta_text, bold_path, reg_path,
+            max(10, w - 2 * pad), max(10, h - 2 * pad),
+        )
+        total_height = sum(b["block_height"] + b["block_gap"] for b in blocks) - blocks[-1]["block_gap"]
 
         scrim_box = (
-            x, y + (h - text_block_height) // 2 - pad,
-            x + w, y + (h - text_block_height) // 2 + text_block_height + pad,
+            x, y + (h - total_height) // 2 - pad,
+            x + w, y + (h - total_height) // 2 + total_height + pad,
         )
         draw.rectangle(scrim_box, fill=(0, 0, 0, 115))
 
         text_y = scrim_box[1] + pad
-        for line in lines:
-            line_w = draw.textlength(line, font=font)
-            text_x = x + (w - line_w) // 2
-            draw.text((text_x, text_y), line, font=font, fill=(255, 255, 255, 255))
-            text_y += line_spacing
+        for block in blocks:
+            for line in block["lines"]:
+                line_w = draw.textlength(line, font=block["font"])
+                text_x = x + (w - line_w) // 2
+                draw.text((text_x, text_y), line, font=block["font"], fill=block["color"])
+                text_y += block["line_spacing"]
+            text_y += block["block_gap"]
 
         composited = Image.alpha_composite(base, overlay)
         out = io.BytesIO()

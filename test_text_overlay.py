@@ -162,21 +162,21 @@ async def run():
     print("=" * 60)
     print("TEST 9: composite_headline() picks the Devanagari font for Hindi, not the Latin default")
     print("=" * 60)
-    used_font_paths = []
-    real_wrap_and_fit = text_overlay._wrap_and_fit
+    captured_font_paths = []
+    real_fit_text_blocks = text_overlay._fit_text_blocks
 
-    def spying_wrap_and_fit(draw, text, font_path, box_w, box_h):
-        used_font_paths.append(font_path)
-        return real_wrap_and_fit(draw, text, font_path, box_w, box_h)
+    def spying_fit_text_blocks(draw, headline, subtext, cta_text, bold_font_path, regular_font_path, box_w, box_h):
+        captured_font_paths.append((bold_font_path, regular_font_path))
+        return real_fit_text_blocks(draw, headline, subtext, cta_text, bold_font_path, regular_font_path, box_w, box_h)
 
-    text_overlay._wrap_and_fit = spying_wrap_and_fit
+    text_overlay._fit_text_blocks = spying_fit_text_blocks
     text_overlay.create_message = fake_create_message_normal
     await text_overlay.composite_headline(_make_png(1229, 1536), "सप्ताहांत बिक्री", language="hi")
-    text_overlay._wrap_and_fit = real_wrap_and_fit
-    assert used_font_paths and "Devanagari" in used_font_paths[0], (
-        f"FAIL: expected a Devanagari font file for Hindi, got {used_font_paths}"
+    text_overlay._fit_text_blocks = real_fit_text_blocks
+    assert captured_font_paths and "Devanagari" in captured_font_paths[0][0], (
+        f"FAIL: expected a Devanagari bold font file for Hindi, got {captured_font_paths}"
     )
-    print(f"PASS: used {os.path.basename(used_font_paths[0])}\n")
+    print(f"PASS: used {os.path.basename(captured_font_paths[0][0])}\n")
 
     print("=" * 60)
     print("TEST 10: every bundled font file referenced by the module actually resolves on disk")
@@ -188,6 +188,75 @@ async def run():
     missing = [f for f in all_files if not os.path.isfile(os.path.join(text_overlay._FONTS_DIR, f))]
     assert not missing, f"FAIL: missing bundled font files: {missing}"
     print(f"PASS: all {len(all_files)} referenced font files exist under {text_overlay._FONTS_DIR}\n")
+
+    print("=" * 60)
+    print("TEST 11: _fit_text_blocks() with only a headline behaves like the single-block case")
+    print("=" * 60)
+    blocks = text_overlay._fit_text_blocks(
+        draw, "Big Sale", None, None, font_path, font_path, box_w=800, box_h=300,
+    )
+    assert len(blocks) == 1, f"FAIL: expected exactly 1 block for headline-only, got {len(blocks)}"
+    print(f"PASS: {len(blocks)} block, size={blocks[0]['font'].size}\n")
+
+    print("=" * 60)
+    print("TEST 12: _fit_text_blocks() with headline + subtext + cta produces 3 blocks in decreasing size")
+    print("=" * 60)
+    reg_path = os.path.join(text_overlay._FONTS_DIR, "NotoSans-Regular.ttf")
+    blocks = text_overlay._fit_text_blocks(
+        draw, "How SocioBurp Works",
+        "The AI Growth Platform that gets your business discovered.",
+        "DM us SYSTEM or visit www.socioburp.com",
+        font_path, reg_path, box_w=1000, box_h=500,
+    )
+    assert len(blocks) == 3, f"FAIL: expected 3 blocks (headline+subtext+cta), got {len(blocks)}"
+    sizes = [b["font"].size for b in blocks]
+    assert sizes[0] > sizes[1] > sizes[2], f"FAIL: expected strictly decreasing sizes headline>subtext>cta, got {sizes}"
+    total_reconstructed = sum(b["block_height"] + b["block_gap"] for b in blocks) - blocks[-1]["block_gap"]
+    assert total_reconstructed <= 500, f"FAIL: fitted blocks exceed the given box_h, got {total_reconstructed}"
+    print(f"PASS: 3 blocks, sizes={sizes} (strictly decreasing)\n")
+
+    print("=" * 60)
+    print("TEST 13: _fit_text_blocks() never drops words even under a tiny box (shrinks instead)")
+    print("=" * 60)
+    blocks = text_overlay._fit_text_blocks(
+        draw,
+        "A very long headline that will not fit at any large size in this tiny box",
+        "An equally long subtext line that also needs to survive the shrink-to-fit process",
+        "www.example.com",
+        font_path, reg_path, box_w=200, box_h=150,
+    )
+    headline_words = "A very long headline that will not fit at any large size in this tiny box".split()
+    reconstructed_headline = " ".join(blocks[0]["lines"]).split()
+    assert reconstructed_headline == headline_words, (
+        f"FAIL: headline words were dropped under a tiny box -- expected {headline_words}, got {reconstructed_headline}"
+    )
+    print(f"PASS: all {len(blocks)} blocks preserved full text even in a 200x150 box\n")
+
+    print("=" * 60)
+    print("TEST 14: composite_headline() draws all three blocks when subtext+cta are given")
+    print("=" * 60)
+    text_overlay.create_message = fake_create_message_normal
+    solid2 = _make_png(1229, 1536, color=(30, 40, 90))
+    out_headline_only = await text_overlay.composite_headline(solid2, "Big Sale")
+    out_all_three = await text_overlay.composite_headline(
+        solid2, "Big Sale", subtext="Everything must go this weekend", cta_text="Visit us today",
+    )
+    assert out_headline_only != solid2 and out_all_three != solid2
+    assert out_headline_only != out_all_three, (
+        "FAIL: adding subtext+cta should change the rendered output vs. headline-only"
+    )
+    img_all_three = Image.open(io.BytesIO(out_all_three))
+    assert img_all_three.size == (1229, 1536)
+    print("PASS: headline-only and headline+subtext+cta produce different (both valid) output\n")
+
+    print("=" * 60)
+    print("TEST 15: composite_headline() with blank subtext/cta behaves exactly like headline-only")
+    print("=" * 60)
+    out_blank_extras = await text_overlay.composite_headline(solid2, "Big Sale", subtext="   ", cta_text="")
+    assert out_blank_extras == out_headline_only, (
+        "FAIL: whitespace-only subtext and empty cta_text should be treated as absent, not as empty blocks"
+    )
+    print("PASS: blank/empty subtext and cta_text are correctly ignored\n")
 
     print("ALL TESTS PASSED")
 
