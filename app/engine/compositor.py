@@ -39,9 +39,58 @@ def _position_coords(position: str, base_w: int, base_h: int, logo_w: int, logo_
     return coords.get(position, coords[DEFAULT_POSITION])
 
 
+def _rects_overlap(r1: tuple, r2: tuple) -> bool:
+    x1, y1, w1, h1 = r1
+    x2, y2, w2, h2 = r2
+    return not (x1 + w1 <= x2 or x2 + w2 <= x1 or y1 + h1 <= y2 or y2 + h2 <= y1)
+
+
+def _avoid_overlap(coords: tuple, logo_w: int, logo_h: int, base_w: int, base_h: int, avoid_rect: tuple | None, margin: int) -> tuple:
+    """
+    Aug 2026 "logo overlapping my text" fix: logo_placement.py's vision
+    call is told to avoid the headline text, and usually does, but a
+    vision model estimating pixel coordinates isn't guaranteed precise --
+    a close-but-wrong guess can still visibly clip the text scrim. Rather
+    than trust that estimate alone, this checks the ACTUAL chosen spot
+    against the ACTUAL drawn text rectangle (real pixel math, not a
+    guess) and deterministically substitutes a non-overlapping named
+    corner if it collides -- same "never trust probabilistic precision
+    when exact math can guarantee it" principle as image_gen.py's outpaint
+    fix and text_overlay.py's own font rendering.
+
+    Tries corners in a fixed priority order and returns the first one
+    that clears `avoid_rect` (and stays on-canvas). If literally none do
+    (e.g. a scrim spanning nearly the whole canvas), returns the original
+    `coords` unchanged -- no worse than not having this check at all.
+    """
+    if avoid_rect is None:
+        return coords
+
+    logo_rect = (coords[0], coords[1], logo_w, logo_h)
+    if not _rects_overlap(logo_rect, avoid_rect):
+        return coords
+
+    max_x = max(margin, base_w - logo_w - margin)
+    max_y = max(margin, base_h - logo_h - margin)
+    candidates = [
+        (max_x, max_y),                      # bottom-right
+        (max_x, margin),                     # top-right
+        (margin, max_y),                     # bottom-left
+        (margin, margin),                    # top-left
+        ((base_w - logo_w) // 2, margin),    # top-center
+    ]
+    for cand in candidates:
+        if not _rects_overlap((cand[0], cand[1], logo_w, logo_h), avoid_rect):
+            logger.info("Logo placement %s overlapped the text area — moved to %s instead", coords, cand)
+            return cand
+
+    logger.warning("No candidate logo position clears the text area (avoid_rect=%s) — keeping original choice", avoid_rect)
+    return coords
+
+
 async def composite_logo(
     creative_bytes: bytes, logo_bytes: bytes, position: str = DEFAULT_POSITION,
-    smart: bool = False, preference: str | None = None,
+    smart: bool = False, preference: str | None = None, avoid_rect: tuple | None = None,
 ) -> bytes:
     """
     Pastes the logo (scaled to ~12% of the creative's width) onto the
@@ -60,6 +109,13 @@ async def composite_logo(
     which general area. Falls back to the named-position default if the
     vision call itself fails for any reason -- same fail-safe pattern as
     everywhere else in this codebase.
+
+    avoid_rect: (x, y, width, height) of the actual composited headline/
+    subtext/CTA text area, if known (see text_overlay.composite_headline()'s
+    return value) -- Aug 2026 follow-up. Whatever position gets chosen
+    (smart or named) is checked against this rect and deterministically
+    substituted for a clear corner if it overlaps, rather than relying
+    solely on the vision call's own precision to avoid it.
     """
     try:
         base = Image.open(io.BytesIO(creative_bytes)).convert("RGBA")
@@ -87,6 +143,8 @@ async def composite_logo(
             max_x = max(MARGIN, base.width - logo.width - MARGIN)
             max_y = max(MARGIN, base.height - logo.height - MARGIN)
             coords = (max(MARGIN, min(coords[0], max_x)), max(MARGIN, min(coords[1], max_y)))
+
+        coords = _avoid_overlap(coords, logo.width, logo.height, base.width, base.height, avoid_rect, MARGIN)
 
         base.paste(logo, coords, logo)
 

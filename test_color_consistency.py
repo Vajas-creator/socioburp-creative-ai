@@ -235,7 +235,7 @@ async def test_carousel_slides_share_resolved_colors():
     orch.content_policy.check = fake_content_policy_check
 
     async def fake_composite_headline(image_bytes, headline, subtext=None, cta_text=None, language=None):
-        return image_bytes
+        return image_bytes, None
 
     orch.text_overlay.composite_headline = fake_composite_headline
 

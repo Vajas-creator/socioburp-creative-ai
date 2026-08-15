@@ -249,13 +249,22 @@ async def composite_headline(
     subtext: str | None = None,
     cta_text: str | None = None,
     language: str | None = None,
-) -> bytes:
+) -> tuple[bytes, tuple[int, int, int, int] | None]:
     """
     Composites `headline` -- and, if given, a smaller `subtext` line and an
     even smaller `cta_text` line stacked beneath it -- onto the image as
     real, crisp text with a semi-transparent scrim behind the whole stack
-    for guaranteed legibility. Returns PNG bytes. If anything goes wrong,
-    returns the original image unmodified rather than failing the whole
+    for guaranteed legibility.
+
+    Returns (image_bytes, scrim_rect). scrim_rect is the (x, y, width,
+    height) of the drawn text+scrim area in pixel coordinates, or None if
+    nothing was drawn (blank headline, or the compositing step itself
+    failed) -- Aug 2026 "logo overlapping my text" follow-up: the CALLER
+    passes this rect to compositor.composite_logo()'s `avoid_rect` so the
+    logo is deterministically kept off the text, instead of relying
+    solely on the logo-placement vision call to eyeball where the text
+    ended up and not collide with it. If anything goes wrong here, returns
+    the original image unmodified rather than failing the whole
     generation -- same fail-safe pattern as compositor.py's
     composite_logo().
 
@@ -264,7 +273,7 @@ async def composite_headline(
     exactly as before.
     """
     if not headline or not headline.strip():
-        return image_bytes
+        return image_bytes, None
 
     try:
         base = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
@@ -306,8 +315,11 @@ async def composite_headline(
         composited = Image.alpha_composite(base, overlay)
         out = io.BytesIO()
         composited.convert("RGB").save(out, format="PNG")
-        return out.getvalue()
+
+        scrim_x, scrim_y, scrim_right, scrim_bottom = scrim_box
+        scrim_rect = (int(scrim_x), int(scrim_y), int(scrim_right - scrim_x), int(scrim_bottom - scrim_y))
+        return out.getvalue(), scrim_rect
 
     except Exception:
         logger.exception("Headline text compositing failed — returning image without headline text")
-        return image_bytes
+        return image_bytes, None

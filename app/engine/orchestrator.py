@@ -608,8 +608,9 @@ async def generate_carousel(
         # deterministically, before the logo goes on. See
         # app/engine/text_overlay.py's module docstring for why.
         headline_text = built.get("headline_text")
+        text_rect = None
         if headline_text:
-            slide_image = await text_overlay.composite_headline(
+            slide_image, text_rect = await text_overlay.composite_headline(
                 slide_image, headline_text,
                 subtext=built.get("subtext_text"), cta_text=built.get("cta_text"),
                 language=ctx.language,
@@ -621,6 +622,7 @@ async def generate_carousel(
                 if logo_resp.status_code == 200:
                     slide_image = await compositor.composite_logo(
                         slide_image, logo_resp.content, smart=True, preference=ctx.logo_position_hint,
+                        avoid_rect=text_rect,
                     )
 
         # AI-origin metadata (IPTC Digital Source Type) -- see
@@ -1064,8 +1066,9 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         # deterministically, before the logo goes on. See
         # app/engine/text_overlay.py's module docstring for why.
         headline_text = built.get("headline_text")
+        text_rect = None
         if headline_text:
-            best_image = await text_overlay.composite_headline(
+            best_image, text_rect = await text_overlay.composite_headline(
                 best_image, headline_text,
                 subtext=built.get("subtext_text"), cta_text=built.get("cta_text"),
                 language=ctx.language,
@@ -1080,6 +1083,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                 if logo_resp.status_code == 200:
                     best_image = await compositor.composite_logo(
                         best_image, logo_resp.content, smart=True, preference=ctx.logo_position_hint,
+                        avoid_rect=text_rect,
                     )
 
         # AI-origin metadata (IPTC Digital Source Type), applied to the
