@@ -130,19 +130,24 @@ async def run():
     print("=" * 60)
     text_overlay.create_message = fake_create_message_normal
     original = _make_png(1229, 1536)
-    out = await text_overlay.composite_headline(original, "   ")
+    out, scrim_rect = await text_overlay.composite_headline(original, "   ")
     assert out == original, "FAIL: an empty/whitespace headline should return the original bytes untouched"
-    print("PASS: unmodified passthrough for blank headline\n")
+    assert scrim_rect is None, "FAIL: expected no scrim rect when nothing was drawn"
+    print("PASS: unmodified passthrough for blank headline, scrim_rect=None\n")
 
     print("=" * 60)
     print("TEST 7: composite_headline() actually draws something (pixels change) for a real headline")
     print("=" * 60)
     solid = _make_png(1229, 1536, color=(200, 100, 50))
-    out = await text_overlay.composite_headline(solid, "Weekend Sale: 50% Off Today Only")
+    out, scrim_rect = await text_overlay.composite_headline(solid, "Weekend Sale: 50% Off Today Only")
     result = Image.open(io.BytesIO(out))
     assert result.size == (1229, 1536)
     assert out != solid, "FAIL: composite_headline should have changed the pixels by drawing the headline + scrim"
-    print(f"PASS: output size {result.size}, pixels changed as expected\n")
+    assert scrim_rect is not None and len(scrim_rect) == 4, f"FAIL: expected a (x,y,w,h) scrim rect, got {scrim_rect}"
+    sx, sy, sw, sh = scrim_rect
+    assert sw > 0 and sh > 0, f"FAIL: expected a non-degenerate scrim rect, got {scrim_rect}"
+    assert 0 <= sx and sx + sw <= 1229 and 0 <= sy and sy + sh <= 1536, f"FAIL: scrim rect out of canvas bounds: {scrim_rect}"
+    print(f"PASS: output size {result.size}, pixels changed, scrim_rect={scrim_rect}\n")
 
     print("=" * 60)
     print("TEST 8: composite_headline() fails safe -- returns original bytes if choose_text_box blows up")
@@ -154,10 +159,11 @@ async def run():
     real_choose_text_box = text_overlay.choose_text_box
     text_overlay.choose_text_box = fake_choose_text_box_raises
     original2 = _make_png(1229, 1536)
-    out = await text_overlay.composite_headline(original2, "Weekend Sale")
+    out, scrim_rect = await text_overlay.composite_headline(original2, "Weekend Sale")
     assert out == original2, "FAIL: composite_headline must fail safe to the original image, not raise or return garbage"
+    assert scrim_rect is None, "FAIL: expected no scrim rect when compositing failed"
     text_overlay.choose_text_box = real_choose_text_box
-    print("PASS: fails safe to unmodified original on internal error\n")
+    print("PASS: fails safe to unmodified original on internal error, scrim_rect=None\n")
 
     print("=" * 60)
     print("TEST 9: composite_headline() picks the Devanagari font for Hindi, not the Latin default")
@@ -237,8 +243,8 @@ async def run():
     print("=" * 60)
     text_overlay.create_message = fake_create_message_normal
     solid2 = _make_png(1229, 1536, color=(30, 40, 90))
-    out_headline_only = await text_overlay.composite_headline(solid2, "Big Sale")
-    out_all_three = await text_overlay.composite_headline(
+    out_headline_only, rect_headline_only = await text_overlay.composite_headline(solid2, "Big Sale")
+    out_all_three, rect_all_three = await text_overlay.composite_headline(
         solid2, "Big Sale", subtext="Everything must go this weekend", cta_text="Visit us today",
     )
     assert out_headline_only != solid2 and out_all_three != solid2
@@ -247,15 +253,19 @@ async def run():
     )
     img_all_three = Image.open(io.BytesIO(out_all_three))
     assert img_all_three.size == (1229, 1536)
-    print("PASS: headline-only and headline+subtext+cta produce different (both valid) output\n")
+    assert rect_all_three[3] > rect_headline_only[3], (
+        f"FAIL: 3 stacked blocks should produce a taller scrim rect than 1, got {rect_all_three} vs {rect_headline_only}"
+    )
+    print(f"PASS: headline-only ({rect_headline_only}) vs headline+subtext+cta ({rect_all_three}) produce different, correctly-sized output\n")
 
     print("=" * 60)
     print("TEST 15: composite_headline() with blank subtext/cta behaves exactly like headline-only")
     print("=" * 60)
-    out_blank_extras = await text_overlay.composite_headline(solid2, "Big Sale", subtext="   ", cta_text="")
+    out_blank_extras, rect_blank_extras = await text_overlay.composite_headline(solid2, "Big Sale", subtext="   ", cta_text="")
     assert out_blank_extras == out_headline_only, (
         "FAIL: whitespace-only subtext and empty cta_text should be treated as absent, not as empty blocks"
     )
+    assert rect_blank_extras == rect_headline_only
     print("PASS: blank/empty subtext and cta_text are correctly ignored\n")
 
     print("ALL TESTS PASSED")

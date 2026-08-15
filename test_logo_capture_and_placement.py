@@ -252,6 +252,99 @@ async def test_compositor_smart_vs_named():
     print("PASS: falls back to the named DEFAULT_POSITION on failure\n")
 
 
+async def test_compositor_avoids_text_overlap():
+    """
+    Aug 2026 "logo overlapping my text" fix: logo_placement.py's vision
+    call is told to avoid the headline text, but a vision model
+    estimating pixel coordinates isn't guaranteed precise. compositor.py
+    now checks the ACTUAL chosen spot against the ACTUAL drawn text rect
+    (real pixel math from text_overlay.composite_headline()'s return
+    value) and deterministically substitutes a clear corner if it
+    collides, rather than trusting the vision call's precision alone.
+    """
+    creative = png_bytes(RED, size=(1024, 1024))
+    logo = png_bytes(BLUE, size=(150, 150))
+
+    print("=" * 60)
+    print("TEST 13: _rects_overlap() correctly detects overlap vs. no overlap")
+    print("=" * 60)
+    assert compositor._rects_overlap((0, 0, 100, 100), (50, 50, 100, 100)) is True
+    assert compositor._rects_overlap((0, 0, 100, 100), (100, 100, 100, 100)) is False, (
+        "FAIL: rects that only touch at a corner/edge should not count as overlapping"
+    )
+    assert compositor._rects_overlap((0, 0, 50, 50), (500, 500, 50, 50)) is False
+    print("PASS: overlap detection correct\n")
+
+    print("=" * 60)
+    print("TEST 14: composite_logo(smart=True) moves the logo off the text when the vision pick collides")
+    print("=" * 60)
+
+    async def fake_choose_position_collides(image_bytes, image_w, image_h, logo_w, logo_h, preference):
+        return (700, 700)  # deliberately lands inside the text rect below
+
+    logo_placement.choose_position = fake_choose_position_collides
+    text_rect = (600, 600, 300, 300)  # overlaps (700,700)-(850,850)
+
+    result = await compositor.composite_logo(creative, logo, smart=True, avoid_rect=text_rect)
+    # The logo must NOT actually land inside the avoid_rect anywhere.
+    reopened = Image.open(io.BytesIO(result)).convert("RGB")
+    # Check the originally-chosen (700,700) corner is back to plain
+    # background -- if the logo had stayed there, this pixel would be BLUE.
+    assert reopened.getpixel((720, 720)) == RED, (
+        "FAIL: expected the logo to have been moved away from the colliding spot, but it's still there"
+    )
+    print("PASS: colliding placement was moved off the text rect\n")
+
+    print("=" * 60)
+    print("TEST 15: composite_logo(smart=True) leaves a NON-colliding vision pick untouched")
+    print("=" * 60)
+
+    async def fake_choose_position_clear(image_bytes, image_w, image_h, logo_w, logo_h, preference):
+        return (50, 50)  # nowhere near the text rect below
+
+    logo_placement.choose_position = fake_choose_position_clear
+    result = await compositor.composite_logo(creative, logo, smart=True, avoid_rect=(600, 600, 300, 300))
+    reopened = Image.open(io.BytesIO(result)).convert("RGB")
+    assert reopened.getpixel((70, 70)) != RED, "FAIL: a non-colliding placement should be left exactly where chosen"
+    print("PASS: non-colliding placement left untouched\n")
+
+    print("=" * 60)
+    print("TEST 16: composite_logo() with avoid_rect=None behaves exactly as before (no behavior change)")
+    print("=" * 60)
+    logo_placement.choose_position = fake_choose_position_collides
+    result_with_none = await compositor.composite_logo(creative, logo, smart=True, avoid_rect=None)
+    reopened = Image.open(io.BytesIO(result_with_none)).convert("RGB")
+    assert reopened.getpixel((720, 720)) != RED, (
+        "FAIL: with no avoid_rect given, the vision-chosen spot should be used exactly as before"
+    )
+    print("PASS: avoid_rect=None is a complete no-op, matching pre-fix behavior\n")
+
+    print("=" * 60)
+    print("TEST 17: an avoid_rect covering nearly the whole canvas doesn't crash -- best-effort, keeps original spot")
+    print("=" * 60)
+    logo_placement.choose_position = fake_choose_position_collides
+    huge_rect = (0, 0, 1024, 1024)  # nothing can avoid this
+    result = await compositor.composite_logo(creative, logo, smart=True, avoid_rect=huge_rect)
+    reopened = Image.open(io.BytesIO(result))
+    assert reopened.size == (1024, 1024), "FAIL: should still produce a valid image, just with unavoidable overlap"
+    print("PASS: pathological case handled gracefully, no crash\n")
+
+    print("=" * 60)
+    print("TEST 18: composite_logo(smart=False, named position) also respects avoid_rect")
+    print("=" * 60)
+    logo_placement.choose_position = fake_choose_position_collides  # irrelevant, smart=False doesn't call this
+    # bottom-right named position for a 150x150 logo on a 1024x1024 canvas
+    # with MARGIN=24 lands at roughly (850, 850) -- overlap it deliberately.
+    result = await compositor.composite_logo(
+        creative, logo, position="bottom-right", smart=False, avoid_rect=(800, 800, 224, 224),
+    )
+    reopened = Image.open(io.BytesIO(result)).convert("RGB")
+    assert reopened.getpixel((870, 870)) == RED, (
+        "FAIL: expected the named bottom-right position to also be moved off an overlapping avoid_rect"
+    )
+    print("PASS: named-position path also avoids overlap when avoid_rect is given\n")
+
+
 async def test_router_dispatches_logo_upload():
     from app.db import get_session
     from app.models import Business, ConversationState
@@ -308,6 +401,7 @@ async def run():
     await test_logo_capture_handle()
     await test_logo_placement_clamping_and_fail_safe()
     await test_compositor_smart_vs_named()
+    await test_compositor_avoids_text_overlap()
     await test_router_dispatches_logo_upload()
     print("ALL TESTS PASSED")
 
