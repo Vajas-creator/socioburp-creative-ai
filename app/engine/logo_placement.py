@@ -26,6 +26,7 @@ from app.config import settings
 logger = logging.getLogger("socioburp.engine.logo_placement")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 MARGIN = 24
 
@@ -87,8 +88,7 @@ async def choose_position(
             }],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         x = max(MARGIN, min(int(parsed["x"]), max_x))

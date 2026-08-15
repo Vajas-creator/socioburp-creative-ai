@@ -17,6 +17,7 @@ from app.i18n import LANGUAGE_NAMES
 logger = logging.getLogger("socioburp.engine.caption")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 SYSTEM_PROMPT = """Write an Instagram caption for a social media marketing creative,
 for an Indian small business owner to post as themselves.
@@ -74,8 +75,7 @@ async def generate(ctx: BusinessContext, notes_for_caption: str) -> dict:
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         if "caption" not in parsed or "hashtags" not in parsed:

@@ -34,6 +34,7 @@ from app.engine.context import BusinessContext
 logger = logging.getLogger("socioburp.engine.marketing_advisor")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 MAX_SEARCHES_PER_QUESTION = 3
 
@@ -92,8 +93,7 @@ async def classify_scope(text: str) -> str:
             messages=[{"role": "user", "content": text}],
         )
         out = response.content[0].text.strip()
-        if out.startswith("```"):
-            out = out.strip("`").removeprefix("json").strip()
+        out = extract_json_text(out)
         parsed = json.loads(out)
         scope = parsed.get("scope")
         if scope not in ("MARKETING", "OFF_TOPIC", "UNCLEAR"):

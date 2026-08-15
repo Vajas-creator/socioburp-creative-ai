@@ -39,6 +39,7 @@ logger = logging.getLogger("socioburp.engine.carousel")
 
 from app.config import settings
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 MIN_SLIDES = 1
 MAX_SLIDES = 9
@@ -91,8 +92,7 @@ async def _parse_slide_briefs(raw_text: str, count: int) -> list[str]:
             messages=[{"role": "user", "content": raw_text}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
         slides = [s.strip() for s in parsed["slides"] if isinstance(s, str) and s.strip()]
         if not slides:
@@ -135,8 +135,7 @@ async def _infer_count_and_slides(raw_text: str) -> tuple[int | None, list[str] 
             messages=[{"role": "user", "content": raw_text}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         count = parsed.get("count")

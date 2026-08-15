@@ -12,6 +12,7 @@ from app.config import settings
 logger = logging.getLogger("socioburp.engine.intent")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 SYSTEM_PROMPT = """Classify the user's message into exactly one intent:
 - GENERATE: wants a brand-new creative with no reference to anything earlier
@@ -53,9 +54,7 @@ async def classify(user_message: str) -> dict:
             messages=[{"role": "user", "content": user_message}],
         )
         text = response.content[0].text.strip()
-        # Strip markdown fences if Claude adds them despite instructions
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         if parsed.get("intent") not in ("GENERATE", "REVISE", "QUESTION", "OTHER"):

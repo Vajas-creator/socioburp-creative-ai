@@ -55,6 +55,7 @@ from app.models import BrandProfile, Generation, Business, LearningEvent
 logger = logging.getLogger("socioburp.engine.learning")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 MAX_LEARNED_PREFERENCES = 8
 
@@ -209,8 +210,7 @@ async def _distill_preferences(business_name, business_industry, preferences: li
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
         return parsed["style_summary"]
     except Exception:

@@ -67,6 +67,14 @@ NORMAL_PHONE = "919999999970"
 
 _REAL_EXECUTE_TOOL = agent_tools.execute_tool  # tests 6/7/9 patch this to a stub; 10/11 need the real dispatcher
 
+
+def _jpeg_bytes():
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10)).save(buf, format="JPEG")
+    return buf.getvalue()
+
 sent_texts = []
 
 
@@ -268,8 +276,10 @@ async def test_agent_image_attachment_not_persisted_as_bytes():
     print("TEST 9: an attached image is passed to the tool call and NOT persisted as raw bytes in history")
     print("=" * 60)
 
+    real_jpeg_bytes = _jpeg_bytes()
+
     async def fake_download_media(media_id):
-        return b"\x89PNGfakebytes"
+        return real_jpeg_bytes
 
     agent.download_media = fake_download_media
 
@@ -292,12 +302,16 @@ async def test_agent_image_attachment_not_persisted_as_bytes():
 
     call_count = {"n": 0}
 
+    seen_media_type = {}
+
     async def fake_create_message_two_step(**kwargs):
         call_count["n"] += 1
         if call_count["n"] == 1:
             last_user_msg = kwargs["messages"][-1]
             blocks = last_user_msg["content"]
             assert isinstance(blocks, list) and any(b["type"] == "image" for b in blocks)
+            image_block = next(b for b in blocks if b["type"] == "image")
+            seen_media_type["value"] = image_block["source"]["media_type"]
             return FakeResponse([FakeContent("tool_use", id="call_logo", name="save_logo", input={"position_hint": "middle"})], "tool_use")
         return FakeResponse([FakeContent("text", text="Saved your logo!")], "end_turn")
 
@@ -307,7 +321,11 @@ async def test_agent_image_attachment_not_persisted_as_bytes():
     sent_texts.clear()
     await agent.handle_message(biz_id, IncomingMessage(sender="919000000005", type="image", media_id="wamid_logo", text="this is my logo"))
 
-    assert received_image_bytes == [b"\x89PNGfakebytes"], f"FAIL: {received_image_bytes}"
+    assert received_image_bytes == [real_jpeg_bytes], f"FAIL: {received_image_bytes}"
+    # This is the exact bug hit in production: WhatsApp photos are JPEG,
+    # and Claude's API rejects a media_type that doesn't match the real
+    # bytes -- see app.engine.agent._detect_image_media_type().
+    assert seen_media_type["value"] == "image/jpeg", f"FAIL: expected the real JPEG bytes to be labeled image/jpeg, got {seen_media_type}"
     with get_session() as db:
         convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
         user_turn = convo.agent_message_history[0]
@@ -375,6 +393,24 @@ def test_tool_save_brand_info_partial_update():
     print(f"PASS: {result!r}\n")
 
 
+def test_detect_image_media_type():
+    print("=" * 60)
+    print("TEST 13: _detect_image_media_type() sniffs the real format instead of assuming PNG")
+    print("=" * 60)
+    import io
+    from PIL import Image
+
+    jpeg_buf = io.BytesIO()
+    Image.new("RGB", (10, 10)).save(jpeg_buf, format="JPEG")
+    png_buf = io.BytesIO()
+    Image.new("RGB", (10, 10)).save(png_buf, format="PNG")
+
+    assert agent._detect_image_media_type(jpeg_buf.getvalue()) == "image/jpeg"
+    assert agent._detect_image_media_type(png_buf.getvalue()) == "image/png"
+    assert agent._detect_image_media_type(b"not an image") == "image/jpeg", "FAIL: expected a safe default, not a raise"
+    print("PASS: jpeg/png correctly distinguished, garbage input defaults safely\n")
+
+
 async def run():
     test_agentic_beta_membership()
     await test_router_dispatches_to_agent()
@@ -382,6 +418,7 @@ async def run():
     await test_agent_tool_use_round()
     await test_agent_max_tool_rounds_and_failure_handling()
     await test_agent_image_attachment_not_persisted_as_bytes()
+    test_detect_image_media_type()
     await test_tool_generate_creative_blocks_on_no_credits()
     await test_tool_save_logo_requires_image()
     test_tool_save_brand_info_partial_update()

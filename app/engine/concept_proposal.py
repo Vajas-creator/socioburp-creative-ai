@@ -30,6 +30,7 @@ from app.persona import PERSONA_SYSTEM_FRAGMENT
 logger = logging.getLogger("socioburp.engine.concept_proposal")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 DECIDE_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 
@@ -84,8 +85,7 @@ async def decide(ctx: BusinessContext, user_message: str) -> dict:
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         if parsed.get("decision") not in ("SPECIFIC_ENOUGH", "NEEDS_PROPOSAL"):
@@ -168,8 +168,7 @@ async def interpret_reply(ctx: BusinessContext, previous_proposal: str, client_r
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         if parsed.get("classification") not in ("CONFIRM", "ADJUST"):
