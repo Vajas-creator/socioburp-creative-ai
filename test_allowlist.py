@@ -72,6 +72,13 @@ wa_client.send_buttons = fake_send_buttons
 
 from app import router, payments  # noqa: E402
 router.send_text = fake_send_text
+
+# This file tests the CLASSIC pipeline's billing-allowlist behavior --
+# unrelated to, but sharing the same test number as, the agentic-beta
+# feature flag (see app/agentic_beta.py). Force it off here so these
+# tests keep exercising the classic router path in isolation regardless
+# of whether TEST_NUMBER is also in the agentic beta list.
+router.agentic_beta.is_enabled = lambda phone: False
 payments.send_buttons = fake_send_buttons
 
 from app.engine import router_intent  # noqa: E402

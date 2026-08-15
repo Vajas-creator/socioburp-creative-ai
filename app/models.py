@@ -141,6 +141,16 @@ class ConversationState(Base):
     # app/history.py, backed directly by the Generation table) -- this is
     # scoped purely to reference resolution.
     recent_images = Column(JSONB, nullable=True)
+    # Text-only running transcript for the agentic-beta conversational
+    # loop (see app/engine/agent.py) -- [{"role": "user"|"assistant",
+    # "text": str}, ...], capped at agent.MAX_HISTORY_TURNS. Deliberately
+    # text-only, no image bytes/URLs persisted here (that would make this
+    # column balloon and re-sending every past image on every turn would
+    # be needlessly expensive) -- a photo attached to the CURRENT message
+    # is shown to Claude for that one call only; app/engine/image_history.py
+    # (recent_images above) already handles resolving "the second one"
+    # style references to a past image's actual URL when needed.
+    agent_message_history = Column(JSONB, nullable=True)
     context = Column(JSONB, default=dict)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
