@@ -1,0 +1,57 @@
+name: Customer simulation (on-demand)
+
+# An LLM plays a small-business customer against the REAL pipeline (real
+# Claude calls, real OpenAI image generation) via qa/customer_simulator.py,
+# then a separate expert-reviewer Claude call critiques the whole
+# transcript + delivered images in depth. See that file's docstring for
+# the full design.
+#
+# Deliberately on-demand only (workflow_dispatch) -- NOT scheduled, NOT
+# run on every push, unlike regression-tests.yml. Every run costs real
+# OpenAI/Anthropic money (several image generations + many Claude calls
+# per persona), so this only fires when someone explicitly wants a check,
+# e.g. right after a deploy.
+#
+# Requires these repository secrets to do anything useful (Settings ->
+# Secrets and variables -> Actions): ANTHROPIC_API_KEY, IMAGE_API_KEY,
+# ALERT_TELEGRAM_TOKEN, ALERT_TELEGRAM_CHAT_ID. The last two are optional
+# -- without them the run still produces the full report artifact, it
+# just skips the Telegram summary.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DATABASE_URL: "sqlite:///./qa_run.db"
+      WA_VERIFY_TOKEN: fake
+      WA_ACCESS_TOKEN: fake
+      WA_PHONE_NUMBER_ID: fake
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      IMAGE_API_KEY: ${{ secrets.IMAGE_API_KEY }}
+      ALERT_TELEGRAM_TOKEN: ${{ secrets.ALERT_TELEGRAM_TOKEN }}
+      ALERT_TELEGRAM_CHAT_ID: ${{ secrets.ALERT_TELEGRAM_CHAT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run customer simulation
+        run: python3 qa/customer_simulator.py
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-simulation-report
+          path: qa_report.md
+          if-no-files-found: warn
