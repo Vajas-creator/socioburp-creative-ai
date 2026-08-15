@@ -183,6 +183,42 @@ async def fake_caption_generate(ctx, notes_for_caption):
 caption_engine.generate = fake_caption_generate
 orchestrator.caption_engine.generate = fake_caption_generate
 
+from app.engine import logo_placement  # noqa: E402
+
+
+async def fake_choose_position(image_bytes, image_w, image_h, logo_w, logo_h, preference):
+    # Unmocked, this hits a real (here: doomed, ~50s of retries) Claude
+    # call every time ctx.has_logo -- returning None here matches the
+    # module's own real fail-safe behavior (falls back to compositor.py's
+    # named-position default), just without the live network round trip.
+    return None
+
+
+logo_placement.choose_position = fake_choose_position
+
+from app.engine import image_history  # noqa: E402
+
+
+async def fake_resolve_reference(business_id, text):
+    # Same fail-safe result as the real function's own except branch --
+    # this test's assertions are about business_id (single logo/parent
+    # per business), not multi-image reference resolution.
+    return None
+
+
+image_history.resolve_reference = fake_resolve_reference
+orchestrator.image_history.resolve_reference = fake_resolve_reference
+
+from app.engine import content_policy  # noqa: E402
+
+
+async def fake_content_policy_check(text):
+    return {"allowed": True, "reason": None}
+
+
+content_policy.check = fake_content_policy_check
+orchestrator.content_policy.check = fake_content_policy_check
+
 # --- Mock R2: uploads record their bytes, downloads serve them back ---
 uploaded = {}  # url -> bytes
 

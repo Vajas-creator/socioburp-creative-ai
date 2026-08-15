@@ -194,7 +194,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
             await send_text(msg.sender, cancel_reply)
             return
 
-        if intent == "GLOBAL_COMMAND":
+        if intent in ("GLOBAL_COMMAND", "LOGO_UPLOAD"):
             with get_session() as db:
                 convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
                 if convo:
@@ -202,7 +202,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
                     convo.pending_image_intent = None
             pending_carousel = None
             pending_image_intent = None
-            # falls through to the GLOBAL_COMMAND handling below
+            # falls through to the GLOBAL_COMMAND/LOGO_UPLOAD handling below
 
         elif pending_image_intent and intent == "CAROUSEL_REQUEST":
             with get_session() as db:
@@ -279,6 +279,16 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     if intent == "CAROUSEL_REQUEST":
         from app.engine import carousel
         await carousel.start(biz_id, msg)
+        return
+
+    # --- Client is declaring an attached image as their logo, to be saved
+    # and remembered -- not a photo to edit or post as-is. See
+    # app/engine/logo_capture.py. Checked before the "photo with no
+    # caption" and generate() branches below, since a captioned "this is
+    # my logo" would otherwise be treated as an edit instruction.
+    if intent == "LOGO_UPLOAD":
+        from app.engine import logo_capture
+        await logo_capture.handle(biz_id, msg)
         return
 
     # --- An uploaded photo with no caption -- ask what to do with it

@@ -229,7 +229,9 @@ async def _use_as_is(business_id: uuid.UUID, phone: str, reference_image_url: st
             async with httpx.AsyncClient(timeout=15.0) as logo_client:
                 logo_resp = await logo_client.get(ctx.logo_url)
                 if logo_resp.status_code == 200:
-                    final_image = compositor.composite_logo(final_image, logo_resp.content)
+                    final_image = await compositor.composite_logo(
+                        final_image, logo_resp.content, smart=True, preference=ctx.logo_position_hint,
+                    )
 
         cap = await caption_engine.generate(ctx, "Post this exact uploaded photo as the creative, unedited")
 
