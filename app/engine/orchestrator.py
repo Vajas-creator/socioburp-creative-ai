@@ -594,12 +594,17 @@ async def generate_carousel(
 
         # Real, code-rendered headline text (Aug 2026) -- the image itself
         # was generated with NO text baked in (see prompt_builder.py's "NO
-        # TEXT" rule); this composites the actual headline on top now,
+        # TEXT" rule); this composites the actual headline (plus an
+        # optional subtext/CTA line, Aug 2026 follow-up) on top now,
         # deterministically, before the logo goes on. See
         # app/engine/text_overlay.py's module docstring for why.
         headline_text = built.get("headline_text")
         if headline_text:
-            slide_image = await text_overlay.composite_headline(slide_image, headline_text, language=ctx.language)
+            slide_image = await text_overlay.composite_headline(
+                slide_image, headline_text,
+                subtext=built.get("subtext_text"), cta_text=built.get("cta_text"),
+                language=ctx.language,
+            )
 
         if ctx.has_logo:
             async with httpx.AsyncClient(timeout=15.0) as http_client:
@@ -993,12 +998,17 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
 
         # Real, code-rendered headline text (Aug 2026) -- the image itself
         # was generated with NO text baked in (see prompt_builder.py's "NO
-        # TEXT" rule); this composites the actual headline on top now,
+        # TEXT" rule); this composites the actual headline (plus an
+        # optional subtext/CTA line, Aug 2026 follow-up) on top now,
         # deterministically, before the logo goes on. See
         # app/engine/text_overlay.py's module docstring for why.
         headline_text = built.get("headline_text")
         if headline_text:
-            best_image = await text_overlay.composite_headline(best_image, headline_text, language=ctx.language)
+            best_image = await text_overlay.composite_headline(
+                best_image, headline_text,
+                subtext=built.get("subtext_text"), cta_text=built.get("cta_text"),
+                language=ctx.language,
+            )
 
         base_image = best_image  # pre-logo-composite (background + headline), kept for free logo-move revisions
 
