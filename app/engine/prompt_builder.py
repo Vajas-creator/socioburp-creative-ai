@@ -264,3 +264,83 @@ def _summarize_context(ctx: BusinessContext) -> str:
             if caption.strip():
                 lines.append(f"  - {caption.strip()}")
     return "\n".join(lines)
+
+
+COLOR_RESOLUTION_SYSTEM_PROMPT = """You are choosing a brand color palette
+for a small business that hasn't uploaded a logo or stated colors yet, so
+that THIS creative and every one after it can use the same palette
+consistently -- an Instagram grid where every post uses a different color
+scheme looks broken, not cohesive, so this choice is made ONCE and reused
+from now on, not re-decided per post.
+
+Pick 1-2 colors (a primary, and an optional secondary) that:
+- Suit the business's industry and stated brand tone.
+- Reflect real current visual conventions for that industry, if given
+  below -- genuine signal about what actually looks current and
+  appealing to that industry's audience (e.g. what other real businesses
+  in this space are visibly doing well right now), not just any color
+  that technically fits the industry in the abstract.
+- Work well as a DOMINANT background/design color across many future
+  posts, not just a nice-sounding accent -- avoid colors too dark or
+  muddy to read well as a broad background, unless the stated brand tone
+  specifically calls for a dark/moody palette.
+
+Reply with JSON only, no other text:
+{"primary_color": "#RRGGBB", "secondary_color": "#RRGGBB or null"}"""
+
+# Used only as a last-resort fallback if the color-resolution call itself
+# fails -- a clean, safe, industry-agnostic pair that reads fine as a
+# dominant background, so a generation is never blocked by this.
+_FALLBACK_PRIMARY_COLOR = "#2D2D2D"
+_FALLBACK_SECONDARY_COLOR = "#F5F5F5"
+
+
+async def resolve_colors(ctx: BusinessContext) -> tuple[str, str | None]:
+    """
+    Returns (primary_color, secondary_color) to actually use for this
+    business's generations.
+
+    If the business already has stored colors (from an uploaded logo or
+    an explicit brand-details answer -- see app/engine/logo_capture.py
+    and app/onboarding.py), those are returned unchanged; a logo/explicit
+    statement is the authoritative source, this function never overrides
+    it.
+
+    Otherwise, picks a palette ONCE via Claude, informed by
+    ctx.industry_style (the same cached "what other businesses in this
+    industry are visibly doing" signal build() also uses) and ctx.tone.
+    The CALLER (orchestrator.py) is responsible for persisting this
+    choice to BrandProfile so every later generation -- and every slide
+    within the SAME carousel -- reuses the identical colors instead of
+    each generation call independently improvising its own palette,
+    which is exactly what was producing visibly inconsistent grids for
+    any business without an uploaded logo or stated colors. Falls back
+    to a safe neutral default on any failure -- generation must never
+    block on a color choice.
+    """
+    if ctx.primary_color:
+        return ctx.primary_color, ctx.secondary_color
+
+    user_content = f"Industry: {ctx.industry or 'general small business'}\n"
+    if ctx.tone:
+        user_content += f"Brand tone: {ctx.tone}\n"
+    if ctx.industry_style:
+        user_content += f"Current industry visual trends: {ctx.industry_style}\n"
+
+    try:
+        response = await create_message(
+            model=settings.CLAUDE_PROMPT_MODEL,
+            max_tokens=150,
+            system=COLOR_RESOLUTION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = extract_json_text(response.content[0].text.strip())
+        parsed = json.loads(text)
+        primary = parsed.get("primary_color")
+        if not primary:
+            raise ValueError("Missing primary_color in color resolution response")
+        return primary, parsed.get("secondary_color")
+
+    except Exception:
+        logger.exception("Color resolution failed for industry=%r — using a neutral default", ctx.industry)
+        return _FALLBACK_PRIMARY_COLOR, _FALLBACK_SECONDARY_COLOR

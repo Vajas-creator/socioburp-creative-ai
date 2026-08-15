@@ -42,6 +42,7 @@ never a live ORM object — because the session closes before those (slow,
 async, external-API-calling) functions run. See app/engine/context.py.
 """
 import asyncio
+import dataclasses
 import json
 import logging
 import uuid
@@ -518,6 +519,14 @@ async def generate_carousel(
         await send_text(phone, f"I can't include that 🙏 {policy['reason']} No credits were charged.")
         return {"status": "blocked", "reason": policy["reason"]}
 
+    # See _resolve_and_lock_colors()'s docstring -- resolved ONCE here,
+    # before any slide is built, so every slide in this carousel shares
+    # identical colors instead of each independently improvising its own
+    # (they build concurrently below, with no other cross-slide
+    # awareness). A business with real stored colors already is
+    # unaffected -- this is a no-op for them.
+    ctx = await _resolve_and_lock_colors(business_id, ctx)
+
     reference_bytes = None
     if reference_image_url:
         try:
@@ -818,6 +827,51 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
         return True  # handled (with an error message) — don't run the paid pipeline on top
 
 
+async def _resolve_and_lock_colors(business_id: uuid.UUID, ctx: BusinessContext) -> BusinessContext:
+    """
+    Aug 2026 "grid colors should be consistent" fix: a business without an
+    uploaded logo or stated colors had prompt_builder.build() improvise a
+    fresh "industry-appropriate" palette on EVERY call, independently --
+    including independently across concurrent slides of the SAME
+    carousel (see generate_carousel()'s _build_one_slide(), which fans
+    out via asyncio.gather with no cross-slide awareness). Nothing ever
+    persisted that choice, so consecutive posts (or even slides within
+    one carousel) could each land on a different color scheme, which is
+    exactly the "ugly, inconsistent grid" problem.
+
+    If `ctx` already has real colors, this is a no-op (a logo/explicit
+    statement is authoritative -- see app/engine/logo_capture.py). Only
+    when it doesn't: resolves a palette ONCE via prompt_builder.
+    resolve_colors(), persists it to BrandProfile (so it's the
+    authoritative colors from now on, exactly like colors from a logo
+    would be), and returns a ctx with those colors filled in for the
+    caller to use for every prompt_builder.build() call in THIS request
+    -- including every slide of a carousel, since they must all share the
+    one just-resolved value rather than each independently resolving
+    their own.
+    """
+    if ctx.primary_color:
+        return ctx
+
+    primary, secondary = await prompt_builder.resolve_colors(ctx)
+
+    try:
+        with get_session() as db:
+            profile = db.query(BrandProfile).filter(BrandProfile.business_id == business_id).first()
+            if profile is None:
+                profile = BrandProfile(business_id=business_id)
+                db.add(profile)
+            if not profile.primary_color:  # don't clobber a concurrent write (e.g. a logo upload mid-flight)
+                profile.primary_color = primary
+                profile.secondary_color = secondary
+    except Exception:
+        logger.exception(
+            "Failed to persist resolved brand colors for business=%s — will re-resolve next time", business_id,
+        )
+
+    return dataclasses.replace(ctx, primary_color=primary, secondary_color=secondary)
+
+
 async def _run_generation(business_id, phone, ctx, brief, user_message, last_generation_id, is_revision, trigger_source, reference_image: bytes | None = None):
     """
     The actual production pipeline (Week 2, unchanged): prompt build -> image
@@ -850,6 +904,13 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
         return {"status": "blocked", "reason": policy["reason"]}
 
     unlimited = allowlist.has_unlimited_access(phone)
+
+    # See _resolve_and_lock_colors()'s docstring -- a no-op for a business
+    # that already has real stored colors (from a logo or explicit
+    # statement); otherwise resolves and PERSISTS a palette once so every
+    # future generation reuses it instead of improvising a new one each
+    # time.
+    ctx = await _resolve_and_lock_colors(business_id, ctx)
 
     try:
         if last_generation_id is None:
