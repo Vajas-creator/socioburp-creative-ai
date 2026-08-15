@@ -178,6 +178,7 @@ async def generate(business_id: uuid.UUID, msg: IncomingMessage):
             website=profile.website if profile else None,
             contact_phone=profile.contact_phone if profile else None,
             logo_url=profile.logo_url if profile else None,
+            logo_position_hint=(profile.extras or {}).get("logo_position_hint") if profile else None,
             learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
             style_summary=(profile.extras or {}).get("style_summary") if profile else None,
             positioning_notes=(profile.extras or {}).get("positioning_notes") if profile else None,
@@ -581,7 +582,9 @@ async def generate_carousel(
             async with httpx.AsyncClient(timeout=15.0) as http_client:
                 logo_resp = await http_client.get(ctx.logo_url)
                 if logo_resp.status_code == 200:
-                    slide_image = compositor.composite_logo(slide_image, logo_resp.content)
+                    slide_image = await compositor.composite_logo(
+                        slide_image, logo_resp.content, smart=True, preference=ctx.logo_position_hint,
+                    )
 
         # AI-origin metadata (IPTC Digital Source Type) -- see
         # app/engine/ai_metadata.py.
@@ -726,7 +729,7 @@ async def _recomposite_logo(business_id, phone, ctx, position, user_message, par
         logger.exception("Fetching base image/logo failed for business=%s — falling back", business_id)
         return False
 
-    composited = compositor.composite_logo(base_resp.content, logo_resp.content, position=position)
+    composited = await compositor.composite_logo(base_resp.content, logo_resp.content, position=position)
     # AI-origin metadata (IPTC Digital Source Type) -- see
     # app/engine/ai_metadata.py. This is still an AI-generated image
     # (the parent's stored background), just with the logo re-pasted.
@@ -963,7 +966,9 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             async with httpx.AsyncClient(timeout=15.0) as http_client:
                 logo_resp = await http_client.get(ctx.logo_url)
                 if logo_resp.status_code == 200:
-                    best_image = compositor.composite_logo(best_image, logo_resp.content)
+                    best_image = await compositor.composite_logo(
+                        best_image, logo_resp.content, smart=True, preference=ctx.logo_position_hint,
+                    )
 
         # AI-origin metadata (IPTC Digital Source Type), applied to the
         # actual delivered creative only -- see app/engine/ai_metadata.py

@@ -22,6 +22,7 @@ class BusinessContext:
     website: str | None = None
     contact_phone: str | None = None
     logo_url: str | None = None
+    logo_position_hint: str | None = None  # free-form client preference, e.g. "put it in the middle" -- see app/engine/logo_capture.py / logo_placement.py
     learned_preferences: list[str] = field(default_factory=list)  # past accepted requests, for style/direction reference
     style_summary: str | None = None  # distilled synthesis once learned_preferences has cycled a few times
     positioning_notes: str | None = None  # price range/positioning + style dos-and-don'ts, from onboarding's "awaiting_brand_details" question -- see app/engine/brand_reflection.py's extract_brand_details()
@@ -71,6 +72,7 @@ async def load_business_context(business_id):
             website=profile.website if profile else None,
             contact_phone=profile.contact_phone if profile else None,
             logo_url=profile.logo_url if profile else None,
+            logo_position_hint=(profile.extras or {}).get("logo_position_hint") if profile else None,
             learned_preferences=list((profile.extras or {}).get("learned_preferences", [])) if profile else [],
             style_summary=(profile.extras or {}).get("style_summary") if profile else None,
             positioning_notes=(profile.extras or {}).get("positioning_notes") if profile else None,

@@ -79,7 +79,13 @@ Rules:
   and detail visible, not stylized into vagueness.
 - Specify: layout, headline text (short, punchy, in quotes), color scheme using
   the brand's exact hex colors if provided, visual style matching the brand
-  tone, clear empty space in the bottom-right corner for logo placement
+  tone, and clear, uncluttered empty space reserved for a logo — by default
+  in the bottom-right corner, UNLESS the business profile below states a
+  logo placement preference, in which case reserve the space there instead
+  (the actual logo is composited on afterward by a separate vision step
+  that picks the exact spot within whatever clear space exists — your job
+  here is only to make sure clear space actually exists in the right
+  general area, not to place the logo yourself)
 - Indian festival/cultural context when relevant (Diwali = diyas, rangoli, warm
   gold tones; Holi = color powder; Independence Day = tricolor accents;
   Raksha Bandhan = rakhi threads)
@@ -197,6 +203,8 @@ def _summarize_context(ctx: BusinessContext) -> str:
     if ctx.contact_phone:
         lines.append(f"Contact phone: {ctx.contact_phone}")
     lines.append(f"Has logo: {'yes' if ctx.has_logo else 'no'}")
+    if ctx.has_logo and ctx.logo_position_hint:
+        lines.append(f"Logo placement preference (reserve empty space there instead of the default corner): {ctx.logo_position_hint}")
     if ctx.style_summary:
         lines.append(f"Distilled style pattern for this client: {ctx.style_summary}")
     if ctx.learned_preferences:

@@ -48,7 +48,7 @@ logger = logging.getLogger("socioburp.engine.router_intent")
 
 from app.anthropic_client import create_message
 
-INTENTS = ("GREETING", "IDENTITY_QUESTION", "GLOBAL_COMMAND", "CAROUSEL_REQUEST", "CANCEL", "OTHER")
+INTENTS = ("GREETING", "IDENTITY_QUESTION", "GLOBAL_COMMAND", "CAROUSEL_REQUEST", "LOGO_UPLOAD", "CANCEL", "OTHER")
 
 SYSTEM_PROMPT = """Classify a WhatsApp message from a small business client
 to Sakshi, an AI creative assistant. Tolerate typos, misspellings, and
@@ -63,13 +63,18 @@ Intents:
 - CAROUSEL_REQUEST: asking for a multi-image Instagram carousel -- a set/series
   of images, multiple slides, or a "collage" of several images meant to be
   posted together (any spelling of "carousel": "carasoul", "carsoul", etc.)
+- LOGO_UPLOAD: declaring an attached image AS their business logo, to be
+  saved/remembered for future creatives -- not a photo to edit or post
+  as-is. Any phrasing that says "this is my logo" / "use this as my logo" /
+  "save this logo" / "yeh mera logo hai", optionally with where they'd
+  like it placed in the same message ("...put it in the middle").
 - CANCEL: explicitly wants to stop/cancel/abandon whatever's currently in
   progress ("never mind", "forget it", "cancel that", "stop")
 - OTHER: anything else -- a creative request, a revision, a question about the
   service, casual chat, or unclear. This is the safe default.
 
 Reply with JSON only, no other text:
-{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|CANCEL|OTHER", "command": "credits"|"topup"|"history"|null}"""
+{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|null}"""
 
 
 async def classify(text: str | None) -> dict:
@@ -112,6 +117,7 @@ _IDENTITY_QUESTION_PATTERNS = (
     "who are you", "what are you",
 )
 _CAROUSEL_WORD_RE = re.compile(r"[a-z]+")
+_LOGO_UPLOAD_PATTERNS = ("this is my logo", "this is our logo", "use this as my logo", "use this as our logo", "save this logo", "save this as my logo")
 
 
 def _mentions_carousel(text_lower: str) -> bool:
@@ -135,6 +141,8 @@ def _fallback_classify(text: str) -> dict:
         return {"intent": "GLOBAL_COMMAND", "command": _GLOBAL_COMMAND_WORDS[text_lower]}
     if _mentions_carousel(text_lower):
         return {"intent": "CAROUSEL_REQUEST", "command": None}
+    if any(p in text_lower for p in _LOGO_UPLOAD_PATTERNS):
+        return {"intent": "LOGO_UPLOAD", "command": None}
     if text_lower in _CANCEL_WORDS:
         return {"intent": "CANCEL", "command": None}
     return {"intent": "OTHER", "command": None}
