@@ -16,6 +16,7 @@ import asyncio
 import base64
 import io
 import logging
+import re
 
 import httpx
 from PIL import Image
@@ -29,6 +30,65 @@ logger = logging.getLogger("socioburp.engine.image_gen")
 # 2026 per product decision.
 TARGET_WIDTH = 1229
 TARGET_HEIGHT = 1536
+
+# Aug 2026 "OpenAI rate limit killing whole carousels" fix -- see
+# _post_with_rate_limit_retry()'s docstring below.
+_RATE_LIMIT_RETRIES = 3          # total attempts, including the first
+_RATE_LIMIT_MAX_WAIT = 30.0      # never wait longer than this, even if the provider suggests more
+_RATE_LIMIT_DEFAULT_WAIT = 5.0   # used if the 429 body doesn't include a parseable suggested wait
+_RETRY_AFTER_RE = re.compile(r"try again in (\d+(?:\.\d+)?)\s*s", re.IGNORECASE)
+
+
+def _parse_retry_after_seconds(resp: httpx.Response) -> float | None:
+    """Pulls the provider's own suggested wait time out of a 429 body, e.g. '...try again in 12s.'"""
+    try:
+        message = resp.json().get("error", {}).get("message", "")
+    except Exception:
+        return None
+    match = _RETRY_AFTER_RE.search(message)
+    if not match:
+        return None
+    return min(float(match.group(1)) + 0.5, _RATE_LIMIT_MAX_WAIT)  # small buffer, capped
+
+
+async def _post_with_rate_limit_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+    """
+    POSTs to `url`, retrying automatically on a 429 (rate limit) response
+    using the provider's own suggested wait time when given, or a fixed
+    default otherwise.
+
+    Real production incident this fixes: a carousel fans out N slides x 2
+    candidates concurrently (see generate_images()'s callers), which can
+    easily burst past OpenAI's gpt-image-2 requests-per-minute cap on the
+    account. Previously, whichever call got rejected with a 429 failed
+    immediately and permanently -- generate_images() returned an empty
+    list for that candidate, and if BOTH of a slide's candidates hit
+    this, orchestrator.py raised "No image returned for carousel slide
+    N", which killed the ENTIRE carousel (asyncio.gather propagates the
+    first exception), throwing away every OTHER slide that had already
+    generated successfully. OpenAI's own 429 body tells us exactly how
+    long the limit takes to reset ("Please try again in 12s") -- a short
+    wait-and-retry turns most of these into quiet successes instead.
+
+    Does NOT retry on any other status code -- a real 4xx/5xx error (bad
+    request, auth failure, server error) won't be fixed by waiting, so
+    retrying it would just waste time before the caller's existing
+    failure handling kicks in anyway.
+    """
+    resp = None
+    for attempt in range(_RATE_LIMIT_RETRIES):
+        resp = await client.post(url, **kwargs)
+        if resp.status_code != 429:
+            return resp
+        if attempt == _RATE_LIMIT_RETRIES - 1:
+            break
+        wait_s = _parse_retry_after_seconds(resp) or _RATE_LIMIT_DEFAULT_WAIT
+        logger.warning(
+            "OpenAI rate limit hit (attempt %d/%d) — waiting %.1fs before retry: %s",
+            attempt + 1, _RATE_LIMIT_RETRIES, wait_s, resp.text[:300],
+        )
+        await asyncio.sleep(wait_s)
+    return resp
 
 
 async def generate_images(prompt: str, count: int = 2, reference_image: bytes | None = None) -> list[bytes]:
@@ -153,7 +213,7 @@ async def _outpaint_openai(img: Image.Image) -> bytes | None:
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, files=files, data=data)
+            resp = await _post_with_rate_limit_retry(client, url, headers=headers, files=files, data=data)
         if resp.status_code >= 400:
             logger.error("Outpaint extend failed: %s | %s", resp.status_code, resp.text[:500])
             return None
@@ -251,7 +311,7 @@ async def _generate_openai(prompt: str, count: int) -> list[bytes]:
             "n": 1,
         }
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
+            resp = await _post_with_rate_limit_retry(client, url, headers=headers, json=payload)
             if resp.status_code >= 400:
                 logger.error("Image gen failed: %s | %s", resp.status_code, resp.text[:500])
                 return None
@@ -285,7 +345,7 @@ async def _edit_openai(prompt: str, count: int, reference_image: bytes) -> list[
         files = {"image": ("reference.png", reference_image, "image/png")}
         data = {"model": "gpt-image-2", "prompt": prompt, "size": "1024x1536", "n": "1"}
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, files=files, data=data)
+            resp = await _post_with_rate_limit_retry(client, url, headers=headers, files=files, data=data)
             if resp.status_code >= 400:
                 logger.error("Image edit failed: %s | %s", resp.status_code, resp.text[:500])
                 return None
