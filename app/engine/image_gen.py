@@ -49,10 +49,10 @@ async def generate_images(prompt: str, count: int = 2, reference_image: bytes | 
         if reference_image is not None:
             edited = await _edit_openai(prompt, count, reference_image)
             if edited:
-                return [_fit_to_target_size(img) for img in edited]
+                return await asyncio.gather(*[_extend_to_target_size(img) for img in edited])
             logger.warning("Image edit produced nothing usable — falling back to text-to-image generation")
         results = await _generate_openai(prompt, count)
-        return [_fit_to_target_size(img) for img in results]
+        return await asyncio.gather(*[_extend_to_target_size(img) for img in results])
 
     raise NotImplementedError(
         f"Image provider '{settings.IMAGE_PROVIDER}' not implemented yet. "
@@ -60,24 +60,133 @@ async def generate_images(prompt: str, count: int = 2, reference_image: bytes | 
     )
 
 
-def _fit_to_target_size(image_bytes: bytes) -> bytes:
+async def _extend_to_target_size(image_bytes: bytes) -> bytes:
+    """
+    Aug 2026 "my image and text still cut" deep-dive: the OLD approach
+    here center-CROPPED the source down to the target ratio, which meant
+    anything the model drew too close to the edge (despite prompt
+    instructions to leave margin) got destroyed -- no amount of prompt
+    tightening can make a probabilistic model respect a hard pixel
+    boundary 100% of the time, so a fixed margin was NEVER going to fully
+    eliminate this.
+
+    This instead EXTENDS the canvas via AI outpainting -- the source
+    already matches the target HEIGHT exactly (1536), so only WIDTH needs
+    growing (1024 -> 1229, ~102px added on each side). Nothing that was
+    actually drawn is ever removed; the model only ever ADDS new content
+    into the fresh margins, continuing the existing scene. This makes
+    "content cut off by the resize step" categorically impossible, not
+    just less likely.
+
+    Falls back to the old crop-based fit (_crop_to_target_size) if the
+    outpaint call itself fails for any reason -- strictly no worse than
+    the previous behavior, never silently returns something broken.
+    """
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        if img.width == TARGET_WIDTH and img.height == TARGET_HEIGHT:
+            out = io.BytesIO()
+            img.save(out, format="PNG")
+            return out.getvalue()
+
+        if img.height != TARGET_HEIGHT or img.width > TARGET_WIDTH:
+            # Not the expected native 1024x1536 shape (defensive -- e.g. a
+            # provider/size change) -- outpainting math below assumes a
+            # pure width extension at matching height, so fall back to the
+            # old crop-based fit rather than risk a malformed canvas/mask.
+            logger.warning(
+                "Source image is %sx%s, not the expected 1024x%s — falling back to crop-based fit",
+                img.width, img.height, TARGET_HEIGHT,
+            )
+            return _crop_to_target_size(image_bytes)
+
+        outpainted = await _outpaint_openai(img)
+        if outpainted is not None:
+            return outpainted
+
+        logger.warning("Outpaint extend failed — falling back to crop-based fit")
+        return _crop_to_target_size(image_bytes)
+
+    except Exception:
+        logger.exception("Failed to extend generated image to target size — falling back to crop-based fit")
+        return _crop_to_target_size(image_bytes)
+
+
+async def _outpaint_openai(img: Image.Image) -> bytes | None:
+    """
+    Extends `img` (assumed TARGET_HEIGHT tall, narrower than TARGET_WIDTH)
+    to exactly TARGET_WIDTH x TARGET_HEIGHT by outpainting new content
+    into the added left/right margins via OpenAI's image-edit endpoint.
+    Returns None on any failure -- caller falls back to cropping.
+    """
+    canvas = Image.new("RGB", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0))
+    paste_x = (TARGET_WIDTH - img.width) // 2
+    canvas.paste(img, (paste_x, 0))
+
+    # Mask per OpenAI's edit contract: transparent (alpha=0) = "generate
+    # here", opaque (alpha=255) = "preserve exactly as-is".
+    mask = Image.new("RGBA", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0, 0))
+    preserved = Image.new("RGBA", (img.width, img.height), (0, 0, 0, 255))
+    mask.paste(preserved, (paste_x, 0))
+
+    canvas_buf = io.BytesIO()
+    canvas.save(canvas_buf, format="PNG")
+    mask_buf = io.BytesIO()
+    mask.save(mask_buf, format="PNG")
+
+    url = "https://api.openai.com/v1/images/edits"
+    headers = {"Authorization": f"Bearer {settings.IMAGE_API_KEY}"}
+    files = {
+        "image": ("canvas.png", canvas_buf.getvalue(), "image/png"),
+        "mask": ("mask.png", mask_buf.getvalue(), "image/png"),
+    }
+    data = {
+        "model": "gpt-image-2",
+        "prompt": (
+            "Extend this image naturally to fill the surrounding transparent margins, "
+            "continuing the existing background/scene seamlessly. Do not add any new text, "
+            "logos, or subjects -- just a natural continuation of what's already there."
+        ),
+        "size": "auto",
+        "n": "1",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, headers=headers, files=files, data=data)
+        if resp.status_code >= 400:
+            logger.error("Outpaint extend failed: %s | %s", resp.status_code, resp.text[:500])
+            return None
+        body = resp.json()
+        b64 = body["data"][0]["b64_json"]
+        result_bytes = base64.b64decode(b64)
+
+        # The edit endpoint may not return EXACTLY TARGET_WIDTHxTARGET_HEIGHT
+        # depending on what size it actually honors -- normalize with a
+        # simple resize (no crop) as a final guarantee of exact dimensions.
+        result_img = Image.open(io.BytesIO(result_bytes)).convert("RGB")
+        if result_img.size != (TARGET_WIDTH, TARGET_HEIGHT):
+            result_img = result_img.resize((TARGET_WIDTH, TARGET_HEIGHT), Image.LANCZOS)
+        out = io.BytesIO()
+        result_img.save(out, format="PNG")
+        return out.getvalue()
+
+    except Exception:
+        logger.exception("Outpaint extend request failed entirely")
+        return None
+
+
+def _crop_to_target_size(image_bytes: bytes) -> bytes:
     """
     Center-crops to the target aspect ratio (no stretching/distortion),
     then uniformly upscales to exactly TARGET_WIDTH x TARGET_HEIGHT.
 
-    Why not just request the target size from the API directly: gpt-image-2
-    (like gpt-image-1) only accepts a fixed enum of sizes -- "1024x1024",
-    "1024x1536", "1536x1024", "auto" -- there's no way to request 1229x1536
-    directly. _generate_openai/_edit_openai request "1024x1536" (native
-    portrait, ratio 0.667) rather than square specifically so this crop
-    only has to remove ~8% off the TOP and BOTTOM to reach the ~0.8 target
-    ratio, leaving the full width untouched -- headline text lives on the
-    horizontal axis, so a square source (which this used to request) needed
-    a ~20%-of-width crop instead and was clipping headline text that
-    extended into that discarded margin (see Aug 2026 incident: "Treat
-    Yourselves" rendering as "reat Yourselves"). This function still
-    handles a width-crop branch too, defensively, in case the source isn't
-    what's expected.
+    Kept as the fallback path for _extend_to_target_size() above (used
+    only if the outpaint API call itself fails) -- this was the PRIMARY
+    resize strategy before Aug 2026's "my image and text still cut"
+    deep-dive, and is strictly worse (can destroy content near the
+    edges), but "sometimes still crops if outpainting is down" beats
+    "the whole generation fails".
     """
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -85,12 +194,10 @@ def _fit_to_target_size(image_bytes: bytes) -> bytes:
         src_ratio = img.width / img.height
 
         if src_ratio > target_ratio:
-            # Source is relatively wider than the target -- crop width.
             crop_w = round(img.height * target_ratio)
             left = (img.width - crop_w) // 2
             img = img.crop((left, 0, left + crop_w, img.height))
         elif src_ratio < target_ratio:
-            # Source is relatively taller than the target -- crop height.
             crop_h = round(img.width / target_ratio)
             top = (img.height - crop_h) // 2
             img = img.crop((0, top, img.width, top + crop_h))
@@ -103,6 +210,16 @@ def _fit_to_target_size(image_bytes: bytes) -> bytes:
     except Exception:
         logger.exception("Failed to fit generated image to target size — returning it unmodified")
         return image_bytes
+
+
+def _fit_to_target_size(image_bytes: bytes) -> bytes:
+    """
+    Backward-compatible sync alias for _crop_to_target_size() -- still
+    used directly by app/engine/image_intent.py's "use as-is" path (a
+    client's OWN uploaded photo, not a generation, so there's no source
+    to outpaint from; simple crop-to-fit is correct there).
+    """
+    return _crop_to_target_size(image_bytes)
 
 
 async def _generate_openai(prompt: str, count: int) -> list[bytes]:

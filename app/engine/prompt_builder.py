@@ -48,29 +48,24 @@ Rules:
 - 1229x1536 portrait format (~4:5) — Instagram feed/Reels-cover shape, not
   a square. Compose for a taller-than-wide canvas: don't center everything
   as if for a 1:1 crop, leave room above and below the focal subject.
-- SAFE ZONE (critical — THREE prior rounds of tightening this exact rule
-  still weren't enough on their own; app/engine/quality.py now ALSO
-  hard-fails and forces a regen on any image where this still slips
-  through, so this prompt-side instruction is the first layer, not the
-  only one — but still write it as forcefully as possible, don't rely on
-  the backstop to cover for a weak prompt):
-  the rendered image gets center-cropped afterward, trimming roughly the
-  outer 8% off the TOP and BOTTOM edges before final delivery. This is
-  advisory to the image model, not a hard guarantee, so give it far more
-  margin than the actual crop needs. Explicitly and forcefully instruct
-  the image model that ALL text (headline, subline, any on-image offer
-  text) and every important visual element must stay within the CENTER
-  50% of the canvas height — i.e. leave the top 25% and bottom 25%
-  completely clear of text and clear of any important visual element,
-  more than double the buffer the actual crop requires. Picture the
-  canvas divided into quarters top-to-bottom: text belongs only in the
-  middle two quarters, never the top or bottom quarter. State this
-  constraint explicitly in the image_prompt text itself, worded as
-  forcefully as the rest of this rule (don't soften it into a suggestion)
-  — restate it near both where headline placement is described AND
-  wherever layout/composition is described, since a single mention is
-  exactly what got missed by the image model in prior testing. The full
-  width is safe and not cropped.
+- NO TEXT OF ANY KIND ON THE IMAGE (critical — this changed Aug 2026, and
+  overrides anything that sounds like it's asking for on-image text
+  elsewhere in this profile or the user's request): never render any
+  words, letters, numbers, or typography anywhere in the image itself —
+  no headline, no subline, no offer text, no price, no phone number, no
+  page/slide counters, nothing. The actual headline gets added afterward
+  by a separate, deterministic, code-based text-rendering step (real
+  fonts, not a diffusion model guessing at glyphs) that composites
+  cleanly on top of this image once it's finished — so this image must be
+  a clean photo/design with NO text baked in at all, full stop. State
+  this explicitly and forcefully in the image_prompt itself.
+- COMPOSITION: this canvas gets extended (not cropped) to its final
+  1229x1536 shape afterward — new content is painted into fresh margins
+  on the sides, nothing that's actually drawn here gets removed. Normal
+  good composition practice still applies: give the main subject some
+  breathing room rather than pressing it flush against the raw edges of
+  the frame, but there's no special crop zone to defend against here
+  anymore.
 - PRODUCT/SUBJECT DETAIL: whatever the actual product, dish, or service
   being advertised is, it must be the sharp, crisp, well-lit, clearly
   detailed focal point — not soft, blurry, generic stock-photo-looking,
@@ -78,34 +73,37 @@ Rules:
   explicitly in the image_prompt: specify realistic, high-detail
   rendering of the product/subject itself, in focus, well-lit, texture
   and detail visible, not stylized into vagueness.
-- Specify: layout, headline text (short, punchy, in quotes), color scheme using
-  the brand's exact hex colors if provided, visual style matching the brand
-  tone, and clear, uncluttered empty space reserved for a logo — by default
-  in the bottom-right corner, UNLESS the business profile below states a
-  logo placement preference, in which case reserve the space there instead
+- Specify in image_prompt: layout, color scheme using the brand's exact hex
+  colors if provided, visual style matching the brand tone, and clear,
+  uncluttered empty space reserved for a logo — by default in the
+  bottom-right corner, UNLESS the business profile below states a logo
+  placement preference, in which case reserve the space there instead
   (the actual logo is composited on afterward by a separate vision step
   that picks the exact spot within whatever clear space exists — your job
   here is only to make sure clear space actually exists in the right
-  general area, not to place the logo yourself)
-- Indian festival/cultural context when relevant (Diwali = diyas, rangoli, warm
-  gold tones; Holi = color powder; Independence Day = tricolor accents;
-  Raksha Bandhan = rakhi threads)
-- Text on image: MAXIMUM 6-word headline + optional 4-word subline. Image
-  models render long text poorly — keep it punchy.
-- If a target language other than English is specified below, write the
-  headline_text itself IN THAT LANGUAGE'S SCRIPT (e.g. actual Devanagari for
-  Hindi, actual Tamil script for Tamil) — not transliterated into Latin
-  letters, and not translated-then-romanized. The image_prompt field must
-  explicitly instruct the image model to render that headline text in that
-  exact script.
+  general area, not to place the logo yourself). Do NOT mention headline
+  text, a subline, or any words at all in image_prompt — see the NO TEXT
+  rule above.
+- headline_text (separate JSON field, NOT part of image_prompt): a short,
+  punchy headline — think "how a real person would text it", not ad copy —
+  MAXIMUM 6 words, optional short subline folded in if it fits naturally.
+  This gets rendered afterward as real, crisp text by a separate
+  deterministic compositing step (app/engine/text_overlay.py), not by the
+  image model, so there's no risk of it coming out garbled or cut off —
+  keep it punchy because that's better marketing copy, not because of any
+  rendering limit.
+- If a target language other than English is specified below, write
+  headline_text itself IN THAT LANGUAGE'S SCRIPT (e.g. actual Devanagari
+  for Hindi, actual Tamil script for Tamil) — not transliterated into
+  Latin letters, and not translated-then-romanized.
 - Offer details (discount %, dates, phone numbers) go in the CAPTION by
-  default, not baked into the image itself — UNLESS the user's request
-  explicitly asks for that detail to appear ON the image (e.g. "put a 25%
-  off overlay on it", "add the discount as text on the image"). In that
-  case, honor it: include that specific detail in the image_prompt as part
-  of the headline/subline (still within the 6-word headline + 4-word
-  subline limit) rather than silently routing it to the caption instead.
-  An explicit instruction always wins over the default.
+  default, not into headline_text — UNLESS the user's request explicitly
+  asks for that detail to appear ON the image (e.g. "put a 25% off overlay
+  on it", "add the discount as text on the image"). In that case, honor
+  it: fold that specific detail into headline_text instead (still within
+  the 6-word-ish spirit of a punchy headline) rather than silently
+  routing it to the caption. An explicit instruction always wins over the
+  default.
 - Never include a false or unverifiable claim as if it were fact (a
   specific certification/award/ranking the business hasn't stated they
   have), a medical/treatment claim, a financial guarantee, or restricted-
