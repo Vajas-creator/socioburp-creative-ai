@@ -489,6 +489,18 @@ async def generate_carousel(
     REVISE against it and explains that carousels aren't revisable yet,
     rather than either silently misapplying a revision to some earlier
     generation or corrupting a carousel's own row.
+
+    Returns {"status": "delivered"|"blocked"|"failed", "reason": str}
+    (reason omitted for "delivered") -- every caller in app/router.py's
+    classic pipeline discards this return value and can keep doing so
+    (nothing here changes what actually gets sent to the client), but
+    app/engine/agent_tools.py's agentic-bot wrapper NEEDS it: without a
+    real status, a blocked/failed call is indistinguishable from success,
+    and the agent will confidently tell the client something delivered
+    when it didn't -- see the Aug 2026 "carousel not building, agent
+    claims success anyway" incident, where a fabricated statistic in the
+    agent's own brief tripped content_policy.py and the agent then just
+    hallucinated a "there you go!" reply on top of the silent block.
     """
     slide_count = len(slide_briefs)
     credit_cost = slide_count * CAROUSEL_CREDIT_PER_SLIDE
@@ -503,7 +515,7 @@ async def generate_carousel(
     policy = await content_policy.check(user_message)
     if not policy["allowed"]:
         await send_text(phone, f"I can't include that 🙏 {policy['reason']} No credits were charged.")
-        return
+        return {"status": "blocked", "reason": policy["reason"]}
 
     reference_bytes = None
     if reference_image_url:
@@ -529,7 +541,7 @@ async def generate_carousel(
             f"You've hit the limit of {settings.MAX_GENERATIONS_PER_HOUR} creatives per hour 🙏 "
             "Please try again in a bit — this just protects against accidental spam.",
         )
-        return
+        return {"status": "blocked", "reason": "rate_limit"}
 
     if last_generation_id:
         await learning.record_accepted_direction(business_id, last_generation_id)
@@ -683,6 +695,7 @@ async def generate_carousel(
             (f"✨ Here's your {slide_count}-slide carousel!\n\n" if slide_count > 1 else "✨ Here's your creative!\n\n")
             + f"💳 Credits left: {balance}{low_balance_note}",
         )
+        return {"status": "delivered"}
 
     except Exception as exc:
         logger.exception("Carousel generation failed for business=%s", business_id)
@@ -694,6 +707,7 @@ async def generate_carousel(
             phone,
             "Something went wrong creating your carousel 🙏 No credits were charged. Please try again.",
         )
+        return {"status": "failed", "reason": str(exc)}
 
 
 async def _recomposite_logo(business_id, phone, ctx, position, user_message, parent_id):
@@ -803,6 +817,12 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
     as an edit reference instead of generating from a text description
     alone. None for text-only requests, or when the caller couldn't
     download it (see generate()).
+
+    Returns {"status": "delivered"|"blocked"|"failed", "reason": str}
+    (reason omitted for "delivered") -- see generate_carousel()'s
+    docstring for why this exists: the classic pipeline's callers all
+    discard it, app/engine/agent_tools.py's agentic-bot wrapper relies on
+    it to avoid claiming success on a silently blocked/failed generation.
     """
     # Content-policy guardrail, checked against the client's own raw
     # words before any paid API call runs -- see app/engine/content_policy.py.
@@ -811,7 +831,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
     policy = await content_policy.check(user_message)
     if not policy["allowed"]:
         await send_text(phone, f"I can't include that 🙏 {policy['reason']} No credits were charged.")
-        return
+        return {"status": "blocked", "reason": policy["reason"]}
 
     unlimited = allowlist.has_unlimited_access(phone)
 
@@ -910,7 +930,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                 phone,
                 "Hmm, the design generation hit a snag 🙏 No credits were charged — please try again.",
             )
-            return
+            return {"status": "failed", "reason": "no_candidates"}
 
         # --- Quality check + one regen if needed (budget-gated) ---
         scored = await quality.score_and_pick(candidates)
@@ -944,7 +964,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
                     "your SocioBurp contact, or this refreshes automatically once you top "
                     "up. No credits were charged.",
                 )
-                return
+                return {"status": "blocked", "reason": "quality_below_bar"}
 
             logger.info(
                 "Quality below threshold (%s < %s) for business=%s, regenerating once",
@@ -1045,6 +1065,7 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             "• \"brighter colors\"\n\n"
             f"💳 Credits left: {balance}{low_balance_note}",
         )
+        return {"status": "delivered"}
 
     except Exception as exc:
         logger.exception("Generation failed for business=%s", business_id)
@@ -1056,3 +1077,4 @@ async def _run_generation(business_id, phone, ctx, brief, user_message, last_gen
             phone,
             "Something went wrong creating your design 🙏 No credits were charged. Please try again.",
         )
+        return {"status": "failed", "reason": str(exc)}

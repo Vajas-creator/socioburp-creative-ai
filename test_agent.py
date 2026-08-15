@@ -413,6 +413,59 @@ def test_detect_image_media_type():
     print("PASS: jpeg/png correctly distinguished, garbage input defaults safely\n")
 
 
+def test_describe_generation_result():
+    print("=" * 60)
+    print("TEST 14: _describe_generation_result() -- the fix for the Aug 2026 false-success hallucination")
+    print("=" * 60)
+    # This is the exact incident: content_policy blocked a fabricated
+    # statistic in the agent's own brief, generate_carousel() returned
+    # (implicitly, before this fix) None either way, and the agent had no
+    # way to tell blocked from delivered -- it just claimed success.
+    delivered = agent_tools._describe_generation_result({"status": "delivered"})
+    assert "SUCCESS" in delivered and "don't" in delivered.lower(), f"FAIL: {delivered!r}"
+
+    blocked = agent_tools._describe_generation_result({"status": "blocked", "reason": "a fabricated statistic"})
+    assert "BLOCKED" in blocked and "NOT delivered" in blocked, f"FAIL: {blocked!r}"
+    assert "a fabricated statistic" in blocked, f"FAIL: expected the reason echoed, got {blocked!r}"
+    assert "do NOT tell them it was delivered" in blocked, f"FAIL: expected an explicit anti-hallucination instruction, got {blocked!r}"
+
+    failed = agent_tools._describe_generation_result({"status": "failed", "reason": "boom"})
+    assert "FAILED" in failed and "NOT delivered" in failed, f"FAIL: {failed!r}"
+
+    unknown = agent_tools._describe_generation_result(None)
+    assert "UNKNOWN" in unknown and "Do NOT assume this succeeded" in unknown, f"FAIL: {unknown!r}"
+    print("PASS: every outcome is stated unambiguously, no room left to hallucinate success\n")
+
+
+async def test_tool_generate_creative_reports_block_accurately():
+    print("=" * 60)
+    print("TEST 15: agent_tools generate_creative reports a content-policy block accurately, not as success")
+    print("=" * 60)
+    from app.engine.context import BusinessContext
+
+    async def fake_run_generation(*args, **kwargs):
+        # Simulates orchestrator._run_generation() actually blocking the
+        # request -- same as what happened live with the fabricated stat.
+        return {"status": "blocked", "reason": "a fabricated statistic"}
+
+    import app.engine.orchestrator as orch
+    orch._run_generation = fake_run_generation
+
+    biz_id = _make_business("919000000009")
+    ctx = BusinessContext(name="Test Biz", industry="bakery")
+    with get_session() as db:
+        from app.credits import add_credits
+        add_credits(db, biz_id, 20, reason="signup_bonus")
+
+    result = await agent_tools.execute_tool(
+        "generate_creative", {"brief": "a post with a made-up stat", "is_revision": False},
+        business_id=biz_id, phone="919000000009", ctx=ctx, last_generation_id=None, current_image_bytes=None,
+    )
+    assert "BLOCKED" in result and "NOT delivered" in result, f"FAIL: expected an honest blocked result, got {result!r}"
+    assert "delivered" not in result.split("NOT delivered")[0], f"FAIL: {result!r}"
+    print(f"PASS: {result!r}\n")
+
+
 async def run():
     test_agentic_beta_membership()
     await test_router_dispatches_to_agent()
@@ -421,7 +474,9 @@ async def run():
     await test_agent_max_tool_rounds_and_failure_handling()
     await test_agent_image_attachment_not_persisted_as_bytes()
     test_detect_image_media_type()
+    test_describe_generation_result()
     await test_tool_generate_creative_blocks_on_no_credits()
+    await test_tool_generate_creative_reports_block_accurately()
     await test_tool_save_logo_requires_image()
     test_tool_save_brand_info_partial_update()
     print("ALL TESTS PASSED")

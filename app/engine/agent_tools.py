@@ -131,6 +131,48 @@ TOOLS = [
 WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 3}
 
 
+def _describe_generation_result(result: dict | None) -> str:
+    """
+    Turns _run_generation()/generate_carousel()'s {"status": ...} return
+    into an UNAMBIGUOUS tool_result for Claude. Aug 2026 incident this
+    fixes: the old version of this wrapper always said "delivered (or a
+    clear error was already sent)" regardless of what actually happened
+    -- when a fabricated statistic in the agent's own brief tripped
+    content_policy.py and the request was silently blocked, Claude had
+    no way to know that, and just hallucinated "there you go! 3 slides
+    are up" on top of it. The status is now always known and stated
+    explicitly, so there's nothing left to guess.
+    """
+    status = (result or {}).get("status")
+    if status == "delivered":
+        return (
+            "SUCCESS: the creative was generated and delivered to the client directly. Don't "
+            "re-describe it or claim what's in it -- they can already see it. Just continue the "
+            "conversation naturally (e.g. ask if they'd like any changes)."
+        )
+    if status == "blocked":
+        reason = (result or {}).get("reason") or "a content policy issue"
+        return (
+            f"BLOCKED, NOT delivered: {reason}. A message explaining this was already sent to the "
+            "client directly -- do NOT tell them it was delivered, and do NOT describe slides or an "
+            "image that doesn't exist. If the block was about something specific in what you wrote "
+            "(e.g. an unverified statistic or claim you added yourself), rewrite the brief WITHOUT "
+            "that specific detail and you may call this tool again; otherwise acknowledge the issue "
+            "and ask the client how they'd like to proceed."
+        )
+    if status == "failed":
+        return (
+            "FAILED, NOT delivered: something went wrong in the generation pipeline itself (not a "
+            "content policy block). An apology was already sent to the client directly -- do NOT "
+            "claim it was delivered. Let them know you hit a snag and offer to try again."
+        )
+    return (
+        "UNKNOWN result -- no status was returned. Do NOT assume this succeeded or describe an "
+        "image/slides as if delivered; tell the client something went wrong and you're not sure "
+        "whether it went through."
+    )
+
+
 async def _tool_generate_creative(business_id: uuid.UUID, phone: str, ctx: BusinessContext, last_generation_id, args: dict) -> str:
     from app.engine.orchestrator import _run_generation, _check_rate_limit
 
@@ -161,12 +203,12 @@ async def _tool_generate_creative(business_id: uuid.UUID, phone: str, ctx: Busin
             except Exception:
                 logger.exception("Failed to fetch resolved reference image for business=%s", business_id)
 
-    await _run_generation(
+    result = await _run_generation(
         business_id, phone, ctx, brief, brief,
         last_generation_id=last_generation_id if is_revision else None,
         is_revision=is_revision, trigger_source="agentic", reference_image=reference_image,
     )
-    return "Delivered (or a clear error was already sent to the client if something went wrong -- don't re-describe success or failure, the image/message speaks for itself; just continue the conversation naturally)."
+    return _describe_generation_result(result)
 
 
 async def _tool_generate_carousel(business_id: uuid.UUID, phone: str, ctx: BusinessContext, last_generation_id, args: dict) -> str:
@@ -186,8 +228,8 @@ async def _tool_generate_carousel(business_id: uuid.UUID, phone: str, ctx: Busin
         )
         return "Blocked: out of credits for this carousel size. Topup options were sent -- tell the client briefly."
 
-    await generate_carousel(business_id, phone, ctx, slide_briefs, user_message=" | ".join(slide_briefs), last_generation_id=last_generation_id)
-    return "Delivered (or a clear error was already sent if something went wrong) -- don't re-describe success/failure, just continue naturally."
+    result = await generate_carousel(business_id, phone, ctx, slide_briefs, user_message=" | ".join(slide_briefs), last_generation_id=last_generation_id)
+    return _describe_generation_result(result)
 
 
 async def _tool_save_logo(business_id: uuid.UUID, phone: str, current_image_bytes: bytes | None, args: dict) -> str:
