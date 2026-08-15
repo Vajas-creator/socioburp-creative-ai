@@ -35,12 +35,9 @@ finishes; only the final plain-text exchange is.
 """
 import asyncio
 import base64
-import io
 import json
 import logging
 import uuid
-
-from PIL import Image
 
 from app.config import settings
 from app.db import get_session
@@ -50,6 +47,7 @@ from app.whatsapp.client import send_text, download_media
 from app.engine.context import BusinessContext
 from app.engine import agent_tools
 from app.engine.prompt_builder import _summarize_context
+from app.image_utils import detect_image_media_type
 from app import credits, alerting
 
 logger = logging.getLogger("socioburp.engine.agent")
@@ -137,22 +135,10 @@ CURRENT BUSINESS PROFILE (what you already know -- don't re-ask this):
 """
 
 
-_PIL_FORMAT_TO_MEDIA_TYPE = {
-    "JPEG": "image/jpeg",
-    "PNG": "image/png",
-    "GIF": "image/gif",
-    "WEBP": "image/webp",
-}
-
-
-def _detect_image_media_type(image_bytes: bytes) -> str:
-    """Sniffs the real format from the bytes -- see the call site for why this can't be hardcoded. Defaults to jpeg (WhatsApp's typical format) if detection itself fails, rather than raising."""
-    try:
-        fmt = Image.open(io.BytesIO(image_bytes)).format
-        return _PIL_FORMAT_TO_MEDIA_TYPE.get(fmt, "image/jpeg")
-    except Exception:
-        logger.exception("Failed to detect image format — defaulting to image/jpeg")
-        return "image/jpeg"
+# Moved to app/image_utils.py once app/engine/logo_capture.py needed the
+# exact same detection for color extraction -- kept importable under its
+# original name here since call sites (and test_agent.py) already use it.
+_detect_image_media_type = detect_image_media_type
 
 
 async def _load_state(business_id: uuid.UUID):

@@ -73,17 +73,38 @@ Rules:
   explicitly in the image_prompt: specify realistic, high-detail
   rendering of the product/subject itself, in focus, well-lit, texture
   and detail visible, not stylized into vagueness.
-- Specify in image_prompt: layout, color scheme using the brand's exact hex
-  colors if provided, visual style matching the brand tone, and clear,
-  uncluttered empty space reserved for a logo — by default in the
-  bottom-right corner, UNLESS the business profile below states a logo
-  placement preference, in which case reserve the space there instead
-  (the actual logo is composited on afterward by a separate vision step
-  that picks the exact spot within whatever clear space exists — your job
-  here is only to make sure clear space actually exists in the right
-  general area, not to place the logo yourself). Do NOT mention headline
-  text, a subline, or any words at all in image_prompt — see the NO TEXT
-  rule above.
+- Specify in image_prompt: layout, visual style matching the brand tone,
+  and clear, uncluttered empty space reserved for a logo — by default in
+  the bottom-right corner, UNLESS the business profile below states a
+  logo placement preference, in which case reserve the space there
+  instead (the actual logo is composited on afterward by a separate
+  vision step that picks the exact spot within whatever clear space
+  exists — your job here is only to make sure clear space actually
+  exists in the right general area, not to place the logo yourself). Do
+  NOT mention headline text, a subline, or any words at all in
+  image_prompt — see the NO TEXT rule above.
+- COLOR (critical — a real brief once specified sky-blue-and-white
+  explicitly and still got a creative that came out dark-navy-dominant
+  with sky blue only as a thin accent, exactly backwards): when the
+  business profile below states brand colors, or the user's request
+  states specific colors, those color(s) must be the DOMINANT colors
+  actually filling most of the composition — the main background, the
+  primary surfaces, the bulk of what the eye sees — not a small accent
+  glowing against a different-colored background, and not swapped for a
+  moodier/more "premium-looking" color the model prefers instead. If a
+  request or profile says "white and sky blue," the finished image should
+  visibly read as a white-and-sky-blue image at a glance, full stop.
+  Deep/dark tones (navy, charcoal, black) may only appear as a genuinely
+  minor accent or shadow detail, never as the dominant background,
+  UNLESS the user or profile explicitly asks for a dark/moody palette.
+  State the specific hex codes and which one is dominant explicitly in
+  image_prompt, worded forcefully — don't just list them and hope.
+  Consistency matters here beyond just this one image: this business's
+  other creatives use the same colors, and an Instagram grid where every
+  post uses wildly different dominant colors looks broken, not cohesive
+  — treat brand colors as a hard constraint on this image, not a vague
+  suggestion. If no colors are specified anywhere, pick colors
+  appropriate to the industry and tone as before.
 - headline_text / subtext_text / cta_text (three separate JSON fields, NOT
   part of image_prompt — this is the ENTIRE set of on-image text this
   request can ever have, since the image itself has none):
@@ -129,7 +150,6 @@ Rules:
   This is a hard rule, not a style preference; a separate check also
   runs before this one (see app/engine/content_policy.py), this is
   defense-in-depth for anything that check didn't catch.
-- If brand colors are missing, pick colors appropriate to the industry and tone.
 - If logo is missing, don't mention logo placement.
 - If "Distilled style pattern" or "Recent requests this client has responded
   well to" are listed, let them inform style/direction/mood — don't repeat
