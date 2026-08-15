@@ -36,7 +36,7 @@ from app.db import get_session
 from app.models import Business, ConversationState
 from app.schemas import IncomingMessage
 from app.whatsapp.client import send_text
-from app import onboarding, credits, payments, persona, i18n, analytics, allowlist, alerting
+from app import onboarding, credits, payments, persona, i18n, analytics, allowlist, alerting, agentic_beta
 from app.engine import router_intent
 
 logger = logging.getLogger("socioburp.router")
@@ -104,6 +104,17 @@ async def handle_message(msg: IncomingMessage):
 
 async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     """The actual routing logic — runs under this business's lock. Not called directly; see handle_message()."""
+    # --- Agentic-beta bot: an allowlisted business's messages skip the
+    # entire classic pipeline below (onboarding state machine, intent
+    # classification, carousel/image-intent negotiation) and go straight
+    # to app/engine/agent.py's continuous, tool-calling conversation
+    # instead -- see app/agentic_beta.py. Checked before even reading
+    # onboarding_state, since the agent handles introductions itself.
+    if agentic_beta.is_enabled(msg.sender):
+        from app.engine import agent
+        await agent.handle_message(biz_id, msg)
+        return
+
     with get_session() as db:
         biz = db.query(Business).filter(Business.id == biz_id).first()
         onboarding_state = biz.onboarding_state
