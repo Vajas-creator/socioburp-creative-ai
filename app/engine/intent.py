@@ -14,8 +14,23 @@ logger = logging.getLogger("socioburp.engine.intent")
 from app.anthropic_client import create_message
 
 SYSTEM_PROMPT = """Classify the user's message into exactly one intent:
-- GENERATE: wants a new creative ("create a Diwali post", "make an offer for tomorrow", "post banao kal ke liye")
-- REVISE: wants to change the last creative ("make it more premium", "change the color", "use less text", "brighter")
+- GENERATE: wants a brand-new creative with no reference to anything earlier
+  in this conversation ("create a Diwali post", "make an offer for tomorrow",
+  "post banao kal ke liye")
+- REVISE: wants to change, build on, or reuse a creative/prompt from EARLIER
+  in this conversation. This covers two shapes, both count:
+  (a) adjusting the most recent one in place ("make it more premium",
+      "change the color", "use less text", "brighter")
+  (b) referring back to something from further back, or reusing/repeating
+      an earlier request ("use the one from before", "take the prompt from
+      our last chat and make one for republic day", "same as last time but
+      for Diwali", "edit the image you made", "use the second one", "wahi
+      wala jo pehle banaya tha, bas colour badal do")
+  If the message points at "earlier", "before", "last time", "that one",
+  "the one you made", a specific past item ("the second one"), or asks to
+  reuse/repeat a prior prompt/concept in any way, it's REVISE — even
+  without an explicit change described, and even if it doesn't literally
+  say "change" or "edit".
 - QUESTION: asking about the service, credits, how things work, or anything not a creative request
 - OTHER: greetings, thanks, unclear, or anything that doesn't fit above
 

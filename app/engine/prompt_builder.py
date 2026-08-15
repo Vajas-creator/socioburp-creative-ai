@@ -138,7 +138,18 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
     try:
         response = await create_message(
             model=settings.CLAUDE_PROMPT_MODEL,
-            max_tokens=600,
+            # Was 600 -- too tight once the SAFE ZONE rule started requiring
+            # the constraint restated twice within image_prompt itself, plus
+            # the product-detail instruction added alongside it (see Aug
+            # 2026 "quality gate + product sharpness" round). Real
+            # production symptom: json.loads() failing with "Unterminated
+            # string" across many unrelated briefs -- the response was
+            # being cut off mid-string before the JSON ever closed, not a
+            # one-off content quirk. 1400 gives real headroom instead of
+            # being right at the edge of what a maximally-detailed prompt
+            # (long safe-zone restatement x2 + product detail + layout +
+            # cultural context + headline + notes_for_caption) needs.
+            max_tokens=1400,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_content}],
         )
