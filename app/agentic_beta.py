@@ -14,14 +14,17 @@ independently-toggleable checks avoids conflating "this number doesn't
 pay" with "this number gets the experimental bot."
 
 Per the explicit rollout decision: build and validate this thoroughly
-against the test number (and the qa/customer_simulator.py harness) BEFORE
-any real customer ever reaches it. Every business not in this list keeps
-using the existing, already-hardened router.py pipeline completely
-unchanged and unaffected.
+against a small set of test numbers (and the qa/customer_simulator.py
+harness) BEFORE any real customer ever reaches it. Every business not in
+this list keeps using the existing, already-hardened router.py pipeline
+completely unchanged and unaffected.
 """
 
 AGENTIC_BETA_PHONES = {
     "919818069317",
+    "918826226623",
+    "919871583289",
+    "919818304622",
 }
 
 
