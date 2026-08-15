@@ -35,9 +35,12 @@ finishes; only the final plain-text exchange is.
 """
 import asyncio
 import base64
+import io
 import json
 import logging
 import uuid
+
+from PIL import Image
 
 from app.config import settings
 from app.db import get_session
@@ -115,6 +118,24 @@ CURRENT BUSINESS PROFILE (what you already know -- don't re-ask this):
 """
 
 
+_PIL_FORMAT_TO_MEDIA_TYPE = {
+    "JPEG": "image/jpeg",
+    "PNG": "image/png",
+    "GIF": "image/gif",
+    "WEBP": "image/webp",
+}
+
+
+def _detect_image_media_type(image_bytes: bytes) -> str:
+    """Sniffs the real format from the bytes -- see the call site for why this can't be hardcoded. Defaults to jpeg (WhatsApp's typical format) if detection itself fails, rather than raising."""
+    try:
+        fmt = Image.open(io.BytesIO(image_bytes)).format
+        return _PIL_FORMAT_TO_MEDIA_TYPE.get(fmt, "image/jpeg")
+    except Exception:
+        logger.exception("Failed to detect image format — defaulting to image/jpeg")
+        return "image/jpeg"
+
+
 async def _load_state(business_id: uuid.UUID):
     with get_session() as db:
         business = db.query(Business).filter(Business.id == business_id).first()
@@ -185,10 +206,17 @@ async def handle_message(business_id: uuid.UUID, msg: IncomingMessage):
 
     user_summary_text = msg.text or ""
     if current_image_bytes is not None:
+        # WhatsApp photos are almost always JPEG, not PNG -- Claude's API
+        # validates media_type against the ACTUAL bytes and rejects a
+        # mismatch outright ("specified using image/png ... appears to be
+        # image/jpeg"), so this can never be hardcoded. Sniffed from the
+        # real bytes rather than trusted from any header, since save_logo
+        # and every downstream use also just treats this as raw bytes.
+        media_type = _detect_image_media_type(current_image_bytes)
         user_content = [{"type": "text", "text": user_summary_text or "(sent a photo, no caption)"}]
         user_content.insert(0, {
             "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(current_image_bytes).decode("utf-8")},
+            "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(current_image_bytes).decode("utf-8")},
         })
         history_note = f"[sent a photo] {user_summary_text}".strip()
     else:

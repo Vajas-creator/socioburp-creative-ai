@@ -27,6 +27,7 @@ from app.models import ConversationState
 logger = logging.getLogger("socioburp.engine.image_history")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 MAX_HISTORY = 8
 
@@ -86,8 +87,7 @@ async def resolve_reference(business_id: uuid.UUID, text: str) -> dict | None:
             messages=[{"role": "user", "content": f"Recent images:\n{listing}\n\nClient's message: {text}"}],
         )
         out = response.content[0].text.strip()
-        if out.startswith("```"):
-            out = out.strip("`").removeprefix("json").strip()
+        out = extract_json_text(out)
         parsed = json.loads(out)
 
         idx = parsed.get("index")

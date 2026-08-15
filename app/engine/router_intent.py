@@ -47,6 +47,7 @@ from app.config import settings
 logger = logging.getLogger("socioburp.engine.router_intent")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 INTENTS = ("GREETING", "IDENTITY_QUESTION", "GLOBAL_COMMAND", "CAROUSEL_REQUEST", "LOGO_UPLOAD", "CANCEL", "OTHER")
 
@@ -90,8 +91,7 @@ async def classify(text: str | None) -> dict:
             messages=[{"role": "user", "content": text}],
         )
         out = response.content[0].text.strip()
-        if out.startswith("```"):
-            out = out.strip("`").removeprefix("json").strip()
+        out = extract_json_text(out)
         parsed = json.loads(out)
 
         if parsed.get("intent") not in INTENTS:

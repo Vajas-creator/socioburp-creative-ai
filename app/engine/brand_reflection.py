@@ -40,6 +40,7 @@ from app.persona import PERSONA_SYSTEM_FRAGMENT
 logger = logging.getLogger("socioburp.engine.brand_reflection")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 UNDERSTAND_BUSINESS_SYSTEM_PROMPT = f"""{PERSONA_SYSTEM_FRAGMENT}
 
@@ -89,8 +90,7 @@ async def understand_business(description: str, language: str = "en") -> dict:
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
         message = parsed.get("message", "").strip()
         if not message or not parsed.get("business_type"):
@@ -174,8 +174,7 @@ async def reflect_first_result(ctx: BusinessContext) -> str:
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
         message = parsed.get("message", "").strip()
         if not message:
@@ -228,8 +227,7 @@ async def extract_brand_details(text: str) -> dict:
             messages=[{"role": "user", "content": text}],
         )
         out = response.content[0].text.strip()
-        if out.startswith("```"):
-            out = out.strip("`").removeprefix("json").strip()
+        out = extract_json_text(out)
         parsed = json.loads(out)
         return {
             "primary_color": parsed.get("primary_color") or None,

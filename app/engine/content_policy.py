@@ -26,6 +26,7 @@ from app.config import settings
 logger = logging.getLogger("socioburp.engine.content_policy")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 SYSTEM_PROMPT = """You review requests to an AI marketing-creative
 generator for small businesses, before any image gets made. Block a
@@ -67,8 +68,7 @@ async def check(text: str) -> dict:
             messages=[{"role": "user", "content": text}],
         )
         out = response.content[0].text.strip()
-        if out.startswith("```"):
-            out = out.strip("`").removeprefix("json").strip()
+        out = extract_json_text(out)
         parsed = json.loads(out)
         allowed = parsed.get("allowed")
         if not isinstance(allowed, bool):

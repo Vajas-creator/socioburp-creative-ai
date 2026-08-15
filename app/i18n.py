@@ -36,6 +36,7 @@ from app.config import settings
 logger = logging.getLogger("socioburp.i18n")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 LANGUAGE_NAMES = {
     "en": "English",
@@ -68,8 +69,7 @@ async def detect_language(text: str) -> str:
             messages=[{"role": "user", "content": text}],
         )
         text_out = response.content[0].text.strip()
-        if text_out.startswith("```"):
-            text_out = text_out.strip("`").removeprefix("json").strip()
+        text_out = extract_json_text(text_out)
         parsed = json.loads(text_out)
         lang = parsed.get("language")
         return lang if lang in LANGUAGE_NAMES else "en"

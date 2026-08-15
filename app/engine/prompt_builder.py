@@ -20,6 +20,7 @@ from app.i18n import LANGUAGE_NAMES
 logger = logging.getLogger("socioburp.engine.prompt_builder")
 
 from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
 
 SYSTEM_PROMPT = """You write prompts for an image generation model that creates
 social media marketing creatives for Indian small businesses.
@@ -160,8 +161,7 @@ async def build(ctx: BusinessContext, user_brief: str) -> dict:
             messages=[{"role": "user", "content": user_content}],
         )
         text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
+        text = extract_json_text(text)
         parsed = json.loads(text)
 
         for key in ("image_prompt", "headline_text", "notes_for_caption"):
