@@ -54,6 +54,20 @@ class Settings:
     # SocioBurp's own connected IG account, no per-client OAuth needed) ---
     MAKE_INSTAGRAM_PROFILE_FETCH_WEBHOOK_URL: str = os.environ.get("MAKE_INSTAGRAM_PROFILE_FETCH_WEBHOOK_URL", "")
 
+    # --- Instagram Insights OAuth (per-business Facebook Login for Business,
+    # ads-engine performance tracking only -- see app/instagram_insights_oauth.py.
+    # Entirely separate from the two integrations above: this is the only one
+    # that reads a CLIENT's own private Insights data (reach/saves/engagement),
+    # which requires their explicit per-business OAuth consent, unlike posting
+    # (SocioBurp's own Make.com connection + manual Page-admin invite) or the
+    # profile/caption fetch (public Business Discovery data only). ---
+    META_APP_ID: str = os.environ.get("META_APP_ID", "")
+    META_APP_SECRET: str = os.environ.get("META_APP_SECRET", "")
+    META_GRAPH_API_VERSION: str = os.environ.get("META_GRAPH_API_VERSION", "v21.0")
+    # Must exactly match a Valid OAuth Redirect URI configured on the Meta
+    # app, e.g. https://<your-render-url>/oauth/instagram/callback
+    META_OAUTH_REDIRECT_URI: str = os.environ.get("META_OAUTH_REDIRECT_URI", "")
+
     # --- Alerts (optional but recommended) ---
     ALERT_TELEGRAM_TOKEN: str = os.environ.get("ALERT_TELEGRAM_TOKEN", "")
     ALERT_TELEGRAM_CHAT_ID: str = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")

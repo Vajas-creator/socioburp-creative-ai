@@ -59,8 +59,10 @@ Intents:
 - GREETING: a bare hello/hi with no actual request in it (any spelling: "hii", "heyy", "yo")
 - IDENTITY_QUESTION: asking whether Sakshi is a real person, an AI, or a bot
 - GLOBAL_COMMAND: asking for their credit balance, to top up / buy more credits,
-  or to see their past generations/history. Also set "command" to exactly one of
-  "credits" | "topup" | "history".
+  to see their past generations/history, or to connect their Instagram for
+  performance tracking (reach/saves/engagement -- NOT the same as posting).
+  Also set "command" to exactly one of "credits" | "topup" | "history" |
+  "connect_instagram".
 - CAROUSEL_REQUEST: asking for a multi-image Instagram carousel -- a set/series
   of images, multiple slides, or a "collage" of several images meant to be
   posted together (any spelling of "carousel": "carasoul", "carsoul", etc.)
@@ -75,7 +77,7 @@ Intents:
   service, casual chat, or unclear. This is the safe default.
 
 Reply with JSON only, no other text:
-{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|null}"""
+{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|"connect_instagram"|null}"""
 
 
 async def classify(text: str | None) -> dict:
@@ -109,7 +111,10 @@ async def classify(text: str | None) -> dict:
 # tolerant beyond what it already had -- it's a safety net for an outage,
 # not the primary path.
 _BARE_GREETINGS = {"hi", "hey", "hello", "hii", "hiii", "heya", "hola", "yo"}
-_GLOBAL_COMMAND_WORDS = {"credits": "credits", "balance": "credits", "topup": "topup", "history": "history"}
+_GLOBAL_COMMAND_WORDS = {
+    "credits": "credits", "balance": "credits", "topup": "topup", "history": "history",
+    "connect instagram": "connect_instagram", "connect ig": "connect_instagram",
+}
 _CANCEL_WORDS = {"cancel", "never mind", "nevermind", "skip", "stop"}
 _IDENTITY_QUESTION_PATTERNS = (
     "are you real", "are you a bot", "are you a real person", "are you human",

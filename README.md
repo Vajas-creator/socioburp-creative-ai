@@ -48,6 +48,10 @@ python3 test_smoke.py
    - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `R2_BUCKET`,
      `R2_PUBLIC_BASE_URL` — from Cloudflare R2 (see comment in `app/storage.py`
      for the one-time bucket setup steps)
+   - `META_APP_ID`, `META_APP_SECRET` — from the Meta App Dashboard → App
+     Settings → Basic. Only needed for the Instagram Insights connect flow
+     (see below); leave blank if you don't need performance tracking yet.
+   - `META_OAUTH_REDIRECT_URI` — `https://<your-service>.onrender.com/oauth/instagram/callback`
 5. Deploy. Confirm `https://<your-service>.onrender.com/` returns
    `{"status": "ok", ...}`
 6. In Meta App Dashboard → WhatsApp → Configuration → Webhook:
@@ -56,6 +60,35 @@ python3 test_smoke.py
    - Subscribe to the `messages` field
 7. Send "hi" to your WhatsApp number from your phone. You should get the
    onboarding welcome message back within a couple seconds.
+
+## Instagram Insights connect flow (ads-engine performance tracking)
+
+Separate from auto-posting (`app/instagram.py`, via Make.com) and the public
+profile fetch (`app/engine/instagram_analysis.py`) — this is the only piece
+that reads a business's own private Insights data (reach, saves,
+engagement), so it's the only one that needs the client's own per-business
+OAuth consent. See `app/instagram_insights_oauth.py` for the full flow.
+
+Setup, in addition to `META_APP_ID`/`META_APP_SECRET`/`META_OAUTH_REDIRECT_URI` above:
+
+1. In Meta App Dashboard → Facebook Login for Business → Settings, add
+   `META_OAUTH_REDIRECT_URI`'s value to "Valid OAuth Redirect URIs".
+2. Add `instagram_basic`, `instagram_manage_insights`, `pages_show_list`,
+   and `pages_read_engagement` as permissions the app requests.
+3. **`instagram_manage_insights` is a restricted permission.** Until Meta
+   grants App Review + Business Verification for it, the flow only works
+   for Instagram accounts added as testers/admins on the Meta app — not
+   real clients. Kick off App Review early; it's a multi-day-to-multi-week
+   external turnaround, independent of anything in this codebase.
+4. A client connects by texting "connect instagram" on WhatsApp — they get
+   a signed, 30-minute link that starts the Facebook Login flow, then
+   land back on WhatsApp with a confirmation once approved.
+
+Once connected, `app/engine/instagram_insights.py` reads raw Insights
+metrics using the stored per-business token. It's intentionally just a
+read client — no readiness-advisory scoring, best-performer ranking, or
+historical tracking yet; those are separate, later pieces of the ads
+engine.
 
 ## Running the Alembic migration
 

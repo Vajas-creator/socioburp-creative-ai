@@ -281,6 +281,10 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
             from app.history import send_recent_generations
             await send_recent_generations(biz_id, msg.sender)
             return
+        if command == "connect_instagram":
+            from app.instagram_insights_oauth import send_connect_link
+            await send_connect_link(biz_id, msg.sender)
+            return
         # Classifier said GLOBAL_COMMAND but didn't name which one --
         # fail safe by falling through to the normal pipeline below
         # rather than doing nothing.

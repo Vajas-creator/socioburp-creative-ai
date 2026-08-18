@@ -29,6 +29,25 @@ class Business(Base):
     onboarding_state = Column(String(50), default="new")  # new -> awaiting_owner_name -> awaiting_business_description -> awaiting_instagram -> done
     instagram_account_id = Column(String(50), nullable=True)  # Meta IG Business Account ID; NULL = not onboarded for auto-posting (auto-POSTING -- separate from instagram_handle below, which is just what the client told us during onboarding)
     instagram_handle = Column(Text, nullable=True)  # whatever the client sent when asked for their Instagram page (handle, link, or just left as text) -- see app/onboarding.py's "awaiting_instagram" state
+
+    # --- Instagram Insights OAuth (ads-engine performance tracking) ---
+    # Deliberately separate from instagram_account_id/instagram_handle above:
+    # those support posting (Make.com's own connection + manual Page-admin
+    # invite) and public profile fetch, neither of which needs or grants
+    # access to this business's own private Insights data. This block is
+    # populated only once the client completes the per-business Facebook
+    # Login for Business flow -- see app/instagram_insights_oauth.py. All
+    # nullable; NULL = never connected (or a prior connection was revoked).
+    instagram_insights_ig_user_id = Column(String(50), nullable=True)  # IG Business Account ID used for Insights calls
+    instagram_insights_page_id = Column(String(50), nullable=True)  # linked Facebook Page ID, kept for reference/debugging
+    instagram_insights_access_token = Column(Text, nullable=True)  # long-lived Page access token, used directly against the Insights API
+    # Expiry of the long-lived USER token this page token was derived from
+    # (~60 days out) -- Meta doesn't hand back a separate expiry for the
+    # derived page token itself, so this is used as our own conservative
+    # "prompt to reconnect" boundary rather than a token Meta will actually
+    # reject on the dot.
+    instagram_insights_token_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    instagram_insights_connected_at = Column(TIMESTAMP(timezone=True), nullable=True)
     regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased
     regens_used_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens actually used
     preferred_language = Column(String(10), nullable=True)  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml'; NULL = not yet detected, treated as 'en'
