@@ -183,13 +183,21 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
     # priority over everything below, same principle as onboarding above
     # -- every reply belongs to that negotiation until it finishes or the
     # client cancels. See app/engine/carousel.py / app/engine/image_intent.py.
-    # EXCEPT: an explicit cancel, an unambiguous global command, or
+    # EXCEPT: an explicit cancel, an unambiguous global command, an explicit
+    # NEW generation command ("create an image of X", "generate a post
+    # about Y" -- Aug 2026 "hard-stop keyword override" fix: previously
+    # this would get swallowed as if it were an ANSWER to whatever question
+    # was pending, e.g. "please pick a number between 1 and 9" in response
+    # to a request that had nothing to do with the carousel count), or
     # (mid-image-upload only) explicitly asking for a carousel -- all read
     # as "switch context", not an answer to the pending question, so the
     # negotiation is dropped and the message falls through to be handled
     # normally instead. Saying "carousel" again mid-CAROUSEL-negotiation is
     # deliberately NOT treated as a topic switch -- that's redundant, not a
-    # switch, and could plausibly be genuine slide content.
+    # switch, and could plausibly be genuine slide content. This does NOT
+    # override the approval gate -- it only skips past an upstream
+    # clarifying question, content still requires explicit approval before
+    # posting (see app/instagram.py).
     if pending_carousel or pending_image_intent:
         if intent == "CANCEL":
             with get_session() as db:
@@ -205,7 +213,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
             await send_text(msg.sender, cancel_reply)
             return
 
-        if intent in ("GLOBAL_COMMAND", "LOGO_UPLOAD"):
+        if intent in ("GLOBAL_COMMAND", "LOGO_UPLOAD", "NEW_GENERATION_REQUEST"):
             with get_session() as db:
                 convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
                 if convo:
@@ -213,7 +221,9 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
                     convo.pending_image_intent = None
             pending_carousel = None
             pending_image_intent = None
-            # falls through to the GLOBAL_COMMAND/LOGO_UPLOAD handling below
+            # falls through to the GLOBAL_COMMAND/LOGO_UPLOAD handling below,
+            # or (NEW_GENERATION_REQUEST) all the way through to generate()
+            # at the bottom of this function, same as OTHER would
 
         elif pending_image_intent and intent == "CAROUSEL_REQUEST":
             with get_session() as db:
