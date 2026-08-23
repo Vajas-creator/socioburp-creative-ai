@@ -49,7 +49,7 @@ logger = logging.getLogger("socioburp.engine.router_intent")
 from app.anthropic_client import create_message
 from app.json_extract import extract_json_text
 
-INTENTS = ("GREETING", "IDENTITY_QUESTION", "GLOBAL_COMMAND", "CAROUSEL_REQUEST", "LOGO_UPLOAD", "CANCEL", "OTHER")
+INTENTS = ("GREETING", "IDENTITY_QUESTION", "GLOBAL_COMMAND", "CAROUSEL_REQUEST", "NEW_GENERATION_REQUEST", "LOGO_UPLOAD", "CANCEL", "OTHER")
 
 SYSTEM_PROMPT = """Classify a WhatsApp message from a small business client
 to Sakshi, an AI creative assistant. Tolerate typos, misspellings, and
@@ -66,6 +66,23 @@ Intents:
 - CAROUSEL_REQUEST: asking for a multi-image Instagram carousel -- a set/series
   of images, multiple slides, or a "collage" of several images meant to be
   posted together (any spelling of "carousel": "carasoul", "carsoul", etc.)
+  -- check this BEFORE NEW_GENERATION_REQUEST below; a carousel/multi-slide
+  ask is always CAROUSEL_REQUEST even if it also uses an imperative verb
+  like "generate" or "make me".
+- NEW_GENERATION_REQUEST: an explicit, self-contained command to create a
+  NEW single piece of content right NOW -- opens with (or clearly centers
+  on) an imperative like "create", "generate", "make me", "make a",
+  "design me", "build me" followed by what to make (a post/image/design of
+  or for something). This is for a fresh instruction the client is giving,
+  not for a message that's just describing a subject, listing details, or
+  could plausibly be answering a question you don't have visibility into
+  -- if it reads as a bare description/answer with no imperative "make
+  this now" framing, classify it as OTHER instead, even if it's about
+  creating content. Example NEW_GENERATION_REQUEST: "create a Diwali
+  poster for my sweets", "generate an image for my new menu", "make me a
+  post about the weekend sale". Example OTHER (NOT this): "a Diwali
+  poster with diyas and rangoli" (no imperative -- reads as an answer/
+  description), "3 product shots and a lifestyle shot" (listing content).
 - LOGO_UPLOAD: declaring an attached image AS their business logo, to be
   saved/remembered for future creatives -- not a photo to edit or post
   as-is. Any phrasing that says "this is my logo" / "use this as my logo" /
@@ -77,7 +94,7 @@ Intents:
   service, casual chat, or unclear. This is the safe default.
 
 Reply with JSON only, no other text:
-{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|"connect_instagram"|null}"""
+{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|NEW_GENERATION_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|"connect_instagram"|null}"""
 
 
 async def classify(text: str | None) -> dict:
@@ -123,6 +140,13 @@ _IDENTITY_QUESTION_PATTERNS = (
 )
 _CAROUSEL_WORD_RE = re.compile(r"[a-z]+")
 _LOGO_UPLOAD_PATTERNS = ("this is my logo", "this is our logo", "use this as my logo", "use this as our logo", "save this logo", "save this as my logo")
+# Anchored at the start of the message, deliberately narrow (a safety-net
+# fallback, not the primary path -- see this module's docstring): only
+# fires on an explicit, unambiguous "make this now" imperative, not any
+# message that merely mentions creating/making something.
+_NEW_GENERATION_REQUEST_RE = re.compile(
+    r"^\s*(create|generate|make me|make an?|design me|design an?|build me|build an?)\b", re.IGNORECASE,
+)
 
 
 def _mentions_carousel(text_lower: str) -> bool:
@@ -146,6 +170,8 @@ def _fallback_classify(text: str) -> dict:
         return {"intent": "GLOBAL_COMMAND", "command": _GLOBAL_COMMAND_WORDS[text_lower]}
     if _mentions_carousel(text_lower):
         return {"intent": "CAROUSEL_REQUEST", "command": None}
+    if _NEW_GENERATION_REQUEST_RE.match(text_lower):
+        return {"intent": "NEW_GENERATION_REQUEST", "command": None}
     if any(p in text_lower for p in _LOGO_UPLOAD_PATTERNS):
         return {"intent": "LOGO_UPLOAD", "command": None}
     if text_lower in _CANCEL_WORDS:

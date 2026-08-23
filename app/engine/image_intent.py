@@ -7,6 +7,17 @@ photo had arrived, and never even downloaded it. This asks what to do
 with it instead of guessing or dropping it -- see the Aug 2026 "uploaded
 reference images are being ignored" investigation.
 
+Aug 2026 follow-up ("interpreting an image shared unprompted"): the
+fixed "change background / use as-is / something else" menu below
+assumed every unprompted image was a photo of the client's OWN product/
+subject meant for editing. That's wrong for a screenshot, a competitor's
+post, a menu, a flyer, or similar -- someone sending one of those wants
+Sakshi to actually LOOK at it and respond to what it shows, not be asked
+whether to "change its background". _understand_image() now looks at the
+image first via Claude vision; only a genuine edit-candidate (or
+something genuinely ambiguous, which fails safe to the existing menu)
+falls through to the button flow below.
+
 State tracked on ConversationState.pending_image_intent (JSON-in-Text,
 same pattern as concept_proposal.py's pending_proposal / carousel.py's
 pending_carousel).
@@ -16,6 +27,7 @@ app/storage.py's upload_reference_image()) rather than kept only as a
 WhatsApp media_id, so it survives however long the client takes to reply.
 """
 import asyncio
+import base64
 import json
 import logging
 import uuid
@@ -29,25 +41,103 @@ from app.whatsapp.client import send_text, send_buttons, download_media
 from app.storage import upload_reference_image, upload_creative
 from app.engine.context import load_business_context
 from app.engine import image_gen, compositor, caption as caption_engine, learning, image_history
+from app.image_utils import detect_image_media_type
 from app.config import settings
 from app import credits, payments, allowlist, alerting
 
 logger = logging.getLogger("socioburp.engine.image_intent")
 
+from app.anthropic_client import create_message
+from app.json_extract import extract_json_text
+
 BUTTON_CHANGE_BG = "img_change_bg"
 BUTTON_USE_AS_IS = "img_use_as_is"
 BUTTON_SOMETHING_ELSE = "img_something_else"
 
+UNDERSTAND_IMAGE_SYSTEM_PROMPT = """You are Sakshi, an AI creative and
+marketing partner for a small business, looking at a photo/image the
+client just sent on WhatsApp with NO caption or instruction attached.
 
-async def _persist_photo(business_id: uuid.UUID, msg: IncomingMessage) -> str | None:
+Decide which of these best describes it:
+- EDIT_CANDIDATE: a photo of THEIR OWN product, dish, service, storefront,
+  or similar subject -- the kind of photo someone sends wanting help
+  turning it into a marketing creative (background changed, used as-is,
+  etc).
+- INFORMATIVE: the image is informative content in its own right, not
+  something to edit -- a screenshot (of Instagram, a competitor, a chat),
+  a competitor's post or ad, a menu, a price list, a flyer, a chart or
+  graph, a document, or similar. Someone sending this almost always wants
+  you to actually look at it and respond to what it shows, not offer to
+  "edit" it.
+- AMBIGUOUS: genuinely unclear which of the above it is.
+
+If INFORMATIVE, also write a short, specific, useful WhatsApp-length reply
+(a few short lines, not an essay) responding to what's actually IN the
+image -- e.g. for a competitor's post, comment on what stands out about
+their offer/style/pricing and how this business could respond; for a
+menu/flyer, note what you notice; for a chart/screenshot, describe what
+it's showing and why it matters. Ground it in this business's own profile
+below where relevant. Stay within your scope as a marketing/creative
+partner -- if the image shows something genuinely unrelated to marketing
+or this business, say so briefly rather than forcing a marketing angle
+onto it.
+
+Business profile:
+{profile}
+
+Reply with JSON only, no other text:
+{{"category": "EDIT_CANDIDATE"|"INFORMATIVE"|"AMBIGUOUS", "response": "..."}}
+("response" only needs real content when category is INFORMATIVE -- empty string otherwise)"""
+
+
+async def _understand_image(ctx, image_bytes: bytes) -> dict:
+    """
+    Returns {"category": "EDIT_CANDIDATE"|"INFORMATIVE"|"AMBIGUOUS",
+    "response": str|None}. Fails safe to {"category": "AMBIGUOUS",
+    "response": None} on any failure -- that routes to the existing
+    button-menu flow, so a vision hiccup never blocks acknowledging the
+    photo, it just falls back to the pre-existing behavior.
+    """
+    profile_lines = [f"Business name: {ctx.name or 'Unknown'}", f"Industry: {ctx.industry or 'Unknown'}"]
+    if ctx.tone:
+        profile_lines.append(f"Brand tone: {ctx.tone}")
+
+    try:
+        media_type = detect_image_media_type(image_bytes)
+        response = await create_message(
+            model=settings.CLAUDE_PROMPT_MODEL,
+            max_tokens=500,
+            system=UNDERSTAND_IMAGE_SYSTEM_PROMPT.format(profile="\n".join(profile_lines)),
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(image_bytes).decode("utf-8")}},
+                    {"type": "text", "text": "What is this image, and if it's informative content, what should I say about it?"},
+                ],
+            }],
+        )
+        text = extract_json_text(response.content[0].text.strip())
+        parsed = json.loads(text)
+        category = parsed.get("category")
+        if category not in ("EDIT_CANDIDATE", "INFORMATIVE", "AMBIGUOUS"):
+            raise ValueError(f"Unexpected category: {category!r}")
+        return {"category": category, "response": (parsed.get("response") or "").strip() or None}
+    except Exception:
+        logger.exception("Image understanding failed for business=%r — falling back to the edit-menu flow", ctx.name)
+        return {"category": "AMBIGUOUS", "response": None}
+
+
+async def _persist_photo(business_id: uuid.UUID, msg: IncomingMessage) -> tuple[str | None, bytes | None]:
+    """Returns (r2_url, image_bytes) -- both None if there's no image or persisting it failed."""
     if not (msg.type == "image" and msg.media_id):
-        return None
+        return None, None
     try:
         image_bytes = await download_media(msg.media_id)
-        return await asyncio.to_thread(upload_reference_image, business_id, image_bytes)
+        url = await asyncio.to_thread(upload_reference_image, business_id, image_bytes)
+        return url, image_bytes
     except Exception:
         logger.exception("Failed to persist uploaded photo for business=%s", business_id)
-        return None
+        return None, None
 
 
 async def _ask_what_to_do(phone: str):
@@ -82,7 +172,7 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
     """Entry point for an image with no caption (see app/router.py)."""
     phone = msg.sender
 
-    reference_image_url = await _persist_photo(business_id, msg)
+    reference_image_url, image_bytes = await _persist_photo(business_id, msg)
     if reference_image_url is None:
         await send_text(phone, "Hmm, I couldn't quite process that image 🙏 Could you try sending it again?")
         return
@@ -91,6 +181,18 @@ async def start(business_id: uuid.UUID, msg: IncomingMessage):
     # reference like "use the second one" can resolve to it even before
     # it's ever been generated from. See app/engine/image_history.py.
     image_history.record_image(business_id, "uploaded", reference_image_url, "a photo the client uploaded")
+
+    # Aug 2026 "look at what was actually uploaded" fix -- see module
+    # docstring. Only a genuine edit-candidate (or something the vision
+    # call couldn't confidently classify) falls through to the fixed
+    # edit-menu; informative content gets a real, grounded response
+    # instead of being asked whether to "change its background".
+    ctx, _ = await load_business_context(business_id)
+    understood = await _understand_image(ctx, image_bytes)
+
+    if understood["category"] == "INFORMATIVE" and understood["response"]:
+        await send_text(phone, understood["response"])
+        return
 
     _save_pending(business_id, {"reference_image_url": reference_image_url})
     await _ask_what_to_do(phone)
@@ -108,7 +210,7 @@ async def advance(business_id: uuid.UUID, msg: IncomingMessage, pending_raw: str
     phone = msg.sender
     pending = json.loads(pending_raw)
 
-    new_reference_url = await _persist_photo(business_id, msg)
+    new_reference_url, _new_image_bytes = await _persist_photo(business_id, msg)
     if new_reference_url:
         pending["reference_image_url"] = new_reference_url
 
