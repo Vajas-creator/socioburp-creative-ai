@@ -33,7 +33,30 @@ def _get_client():
             endpoint_url=f"https://{settings.R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
             aws_access_key_id=settings.R2_ACCESS_KEY,
             aws_secret_access_key=settings.R2_SECRET_KEY,
-            config=Config(signature_version="s3v4"),
+            # Aug 2026 "bot silent after 'give me a moment'" root cause: this
+            # Config previously set NOTHING about timeouts, so every upload
+            # ran on botocore's own defaults -- 60s connect + 60s read, PER
+            # RETRY ATTEMPT (botocore retries connection-level failures on
+            # its own, on top of anything this app does). A transient R2
+            # network hiccup could silently block a generation for several
+            # minutes with zero log output and zero message to the client,
+            # since Python can't reach any except block while still awaiting
+            # inside orchestrator._run_generation()'s try -- a prior fix
+            # (routing reflect_first_result() through that same try/except)
+            # correctly handled a call that RAISES quickly, but did nothing
+            # for a call that just hangs, which is what this actually was.
+            # Short explicit timeouts + a small bounded retry count turn
+            # a real R2 problem into a FAST, LOUD failure instead -- it
+            # still flows into _run_generation()'s existing exception
+            # handler (alert + "Something went wrong" to the client), it
+            # just gets there in ~15-20s instead of several minutes of
+            # silence.
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=10,
+                read_timeout=20,
+                retries={"max_attempts": 2, "mode": "standard"},
+            ),
             region_name="auto",
         )
     return _client
@@ -41,12 +64,22 @@ def _get_client():
 
 def _upload(key: str, data: bytes, content_type: str) -> str:
     client = _get_client()
-    client.put_object(
-        Bucket=settings.R2_BUCKET,
-        Key=key,
-        Body=io.BytesIO(data),
-        ContentType=content_type,
-    )
+    try:
+        client.put_object(
+            Bucket=settings.R2_BUCKET,
+            Key=key,
+            Body=io.BytesIO(data),
+            ContentType=content_type,
+        )
+    except Exception:
+        # Explicit, specifically-labeled log line (Aug 2026 "silent
+        # failure" investigation) -- the caller's own exception handling
+        # (orchestrator.py's try/except around the whole generation) still
+        # catches this and notifies the client; this just makes an R2
+        # failure immediately identifiable in logs instead of looking like
+        # a generic, unlabeled crash somewhere in the pipeline.
+        logger.exception("R2 upload failed for key=%s", key)
+        raise
     url = f"{settings.R2_PUBLIC_BASE_URL.rstrip('/')}/{key}"
     logger.info("Uploaded to R2: %s", key)
     return url
