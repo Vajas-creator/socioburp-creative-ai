@@ -90,6 +90,33 @@ read client — no readiness-advisory scoring, best-performer ranking, or
 historical tracking yet; those are separate, later pieces of the ads
 engine.
 
+## Ad account partner access (ads engine, Phase 2 — prep only)
+
+Every ad campaign the (future) ads engine builds is meant to run and be
+billed against the CLIENT's own Meta ad account — never a shared
+SocioBurp account. `app/engine/ad_account_connect.py` is the WhatsApp
+flow that gets SocioBurp partner ("agency") access to a client's ad
+account via the Marketing API, and `app/engine/meta_partner_access.py`
+makes the actual Graph API calls. **Not wired into anything yet** — there
+is no campaign-builder code in this repo to trigger it; see both modules'
+docstrings for how to wire them in once that lands.
+
+Setup, in addition to `META_APP_ID`/`META_APP_SECRET`/`META_GRAPH_API_VERSION` above:
+
+- `META_BUSINESS_ID` — SocioBurp's own Business Manager ID (Business
+  Settings → Business Info), the "agency" that requests partner access on
+  each client's ad account.
+- `META_SYSTEM_USER_ACCESS_TOKEN` — a non-expiring System User token for
+  that Business Manager (Business Settings → System Users), with
+  `business_management` + `ads_management` scopes. Server-to-server only —
+  this flow runs unattended and never uses a per-client token.
+
+The `POST .../agencies` / `GET .../agencies` request-and-verify mechanism
+this is built on was confirmed against Meta's current Marketing API docs
+via web search, not by exercising it against a real ad account — verify
+the exact request/response shape for the pinned `META_GRAPH_API_VERSION`
+before this goes live with real ad spend behind it.
+
 ## Running the Alembic migration
 
 Once `DATABASE_URL` points at your real Neon database:
