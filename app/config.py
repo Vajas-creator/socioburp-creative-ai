@@ -68,6 +68,22 @@ class Settings:
     # app, e.g. https://<your-render-url>/oauth/instagram/callback
     META_OAUTH_REDIRECT_URI: str = os.environ.get("META_OAUTH_REDIRECT_URI", "")
 
+    # --- Meta ad account partner access (ads engine, Phase 2) ---
+    # SocioBurp's OWN Business Manager ID -- the "agency" business that
+    # requests partner/agency access on each CLIENT's own ad account (see
+    # app/engine/ad_account_connect.py and app/engine/meta_partner_access.py).
+    # Distinct from META_APP_ID (the Meta *app*) -- this is the Business
+    # Manager account itself, found in Business Settings -> Business Info.
+    META_BUSINESS_ID: str = os.environ.get("META_BUSINESS_ID", "")
+    # A System User access token belonging to that Business Manager, with
+    # business_management + ads_management scopes. Server-to-server only --
+    # never a per-client token -- since requesting partner access on a
+    # client's ad account is done FROM SocioBurp's own Business Manager,
+    # not on the client's behalf. Should be a non-expiring System User
+    # token (Business Settings -> System Users), not a short-lived user
+    # token, since this flow runs unattended.
+    META_SYSTEM_USER_ACCESS_TOKEN: str = os.environ.get("META_SYSTEM_USER_ACCESS_TOKEN", "")
+
     # --- Alerts (optional but recommended) ---
     ALERT_TELEGRAM_TOKEN: str = os.environ.get("ALERT_TELEGRAM_TOKEN", "")
     ALERT_TELEGRAM_CHAT_ID: str = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")

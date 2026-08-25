@@ -48,6 +48,21 @@ class Business(Base):
     # reject on the dot.
     instagram_insights_token_expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
     instagram_insights_connected_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # --- Meta ad account partner access (ads engine, Phase 2) ---
+    # The client's OWN Meta ad account/Business Manager -- every ad
+    # campaign this business runs is billed and built against these, NOT a
+    # shared SocioBurp ad account. NULL until they connect one. Populated
+    # by app/engine/ad_account_connect.py's WhatsApp flow; see that
+    # module's docstring for the full connect/verify sequence.
+    meta_ad_account_id = Column(String(50), nullable=True)
+    meta_business_manager_id = Column(String(50), nullable=True)
+    # 'not_connected' (default) | 'pending_approval' (partner request sent,
+    # awaiting the client's approval in their own Business Settings ->
+    # Partners) | 'granted' (confirmed via the Marketing API, not just
+    # taken on the client's word) | 'revoked' (was granted, no longer is --
+    # set by a future reconciliation check, not written by this flow yet).
+    partner_access_status = Column(String(20), nullable=False, default="not_connected")
     regen_allowance_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens earned by credits purchased
     regens_used_this_cycle = Column(Integer, nullable=False, default=0)  # quality-check regens actually used
     preferred_language = Column(String(10), nullable=True)  # 'en'|'hi'|'hinglish'|'ta'|'te'|'kn'|'ml'; NULL = not yet detected, treated as 'en'
@@ -151,6 +166,10 @@ class ConversationState(Base):
     # Tracks an in-progress "what should I do with this uploaded photo"
     # negotiation -- see app/engine/image_intent.py.
     pending_image_intent = Column(Text, nullable=True)
+    # Tracks an in-progress "connect your Meta ad account" negotiation --
+    # see app/engine/ad_account_connect.py. Same JSON-in-Text pattern as
+    # pending_image_intent/pending_carousel above.
+    pending_ad_account_connect = Column(Text, nullable=True)
     # Short-term conversational memory of recent images (both uploaded
     # photos and generated creatives), newest last, capped at
     # image_history.MAX_HISTORY -- lets "change that background" / "use
