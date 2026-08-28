@@ -24,6 +24,14 @@ linked Instagram Business/Creator account, granting instagram_basic +
 instagram_manage_insights (+ pages_show_list/pages_read_engagement, since
 an IG Business Account only exposes Insights via its linked Page).
 
+SCOPES also includes instagram_content_publish. That grant isn't used by
+anything in THIS file -- it exists so the page access token stored below
+is also valid for app/engine/instagram_publish.py's native Content
+Publishing API calls (POST .../media, .../media_publish), which reuses
+this same connection rather than running a second OAuth flow. Businesses
+that connected before this scope was added will need to reconnect
+("connect instagram" again) before native publishing works for them.
+
 Flow:
   1. Client texts something like "connect instagram" -> router.py calls
      send_connect_link() -> a signed, time-boxed link is sent on WhatsApp.
@@ -69,7 +77,7 @@ router = APIRouter()
 
 GRAPH_BASE = f"https://graph.facebook.com/{settings.META_GRAPH_API_VERSION}"
 AUTH_DIALOG_BASE = f"https://www.facebook.com/{settings.META_GRAPH_API_VERSION}/dialog/oauth"
-SCOPES = "instagram_basic,instagram_manage_insights,pages_show_list,pages_read_engagement"
+SCOPES = "instagram_basic,instagram_manage_insights,instagram_content_publish,pages_show_list,pages_read_engagement"
 LINK_TTL_SECONDS = 30 * 60  # 30 minutes -- enough for a client to get through Meta's consent screen, incl. 2FA
 
 
