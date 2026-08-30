@@ -10,12 +10,26 @@ metadata, smart logo placement, alerting) for free instead of
 re-implementing (and risking re-breaking) any of it. The agent decides
 WHEN to call these; what each one actually does on the way to delivering
 a creative is completely unchanged from the classic pipeline.
+
+Two exceptions to that "reuses the classic path" rule, both Instagram:
+  - connect_instagram DOES reuse the classic path -- it's the exact same
+    send_connect_link() that app/router.py's "connect_instagram" global
+    command calls (see app/instagram_insights_oauth.py). The agentic bot
+    had no equivalent at all before this, which is why "connect
+    instagram" silently did nothing useful for agentic-beta numbers.
+  - post_to_instagram does NOT reuse app/instagram.py's Make.com-based
+    "Post to Instagram" button flow. It calls the newer, native
+    app/engine/instagram_publish.py (Meta's own Content Publishing API)
+    instead -- a deliberate choice for agentic-beta specifically, not yet
+    exercised against a real account. If this needs to fall back to the
+    Make.com path later, that's a distinct, larger change, not a tweak
+    here.
 """
 import logging
 import uuid
 
 from app.db import get_session
-from app.models import Business, BrandProfile, ConversationState
+from app.models import Business, BrandProfile, ConversationState, Generation
 from app import credits, payments, allowlist
 from app.engine import image_history
 from app.engine.context import BusinessContext
@@ -124,6 +138,26 @@ TOOLS = [
     {
         "name": "get_recent_creatives",
         "description": "Show the client their recently generated creatives. Use when they ask to see their history or past posts.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "connect_instagram",
+        "description": (
+            "Send the client a secure link to connect their Instagram Business/Creator account. "
+            "Required once before post_to_instagram works. Use when they ask to connect/link "
+            "Instagram, or after post_to_instagram tells you they haven't connected yet."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "post_to_instagram",
+        "description": (
+            "Publish the most recently delivered creative (single image or carousel) directly to "
+            "the client's own connected Instagram account. Only call this when they explicitly ask "
+            "to post/publish/share something to Instagram -- never on your own initiative. If "
+            "there's nothing delivered yet, or they haven't connected Instagram, this tool will "
+            "tell you which -- don't guess."
+        ),
         "input_schema": {"type": "object", "properties": {}},
     },
 ]
@@ -317,6 +351,75 @@ async def _tool_get_recent_creatives(business_id: uuid.UUID, phone: str) -> str:
     return "Recent creatives were sent directly to the client -- don't re-list them yourself."
 
 
+async def _tool_connect_instagram(business_id: uuid.UUID, phone: str) -> str:
+    from app.instagram_insights_oauth import send_connect_link
+    await send_connect_link(business_id, phone)
+    return (
+        "A secure Instagram connect link was sent to the client directly -- don't repeat the link "
+        "yourself, just tell them (briefly, naturally) to tap it and approve access on Facebook. "
+        "It expires in 30 minutes."
+    )
+
+
+async def _tool_post_to_instagram(business_id: uuid.UUID, phone: str, last_generation_id, args: dict) -> str:
+    if last_generation_id is None:
+        return "Error: there's nothing delivered yet to post. Generate a creative first, then post it."
+
+    with get_session() as db:
+        gen = db.query(Generation).filter(
+            Generation.id == last_generation_id,
+            Generation.business_id == business_id,
+        ).first()
+        # Pulled into plain values while the session is open -- see
+        # app/instagram.py's handle_post_request() for why (gen becomes
+        # unusable once this block exits).
+        gen_found = gen is not None
+        already_posted = gen.posted_to_instagram if gen else None
+        image_url = gen.image_url if gen else None
+        carousel_image_urls = gen.carousel_image_urls if gen else None
+        caption = gen.caption if gen else None
+        hashtags = gen.hashtags if gen else None
+
+    if not gen_found:
+        return "Error: couldn't find that creative anymore. Ask the client to generate a new one."
+    if already_posted:
+        return "Already posted: this creative is already live on Instagram. Let the client know."
+
+    full_caption = f"{caption}\n\n{hashtags}"[:2200] if caption else ""
+
+    from app.engine import instagram_publish
+    try:
+        if carousel_image_urls:
+            await instagram_publish.publish_carousel(business_id, carousel_image_urls, caption=full_caption)
+        else:
+            await instagram_publish.publish_image(business_id, image_url, caption=full_caption)
+    except instagram_publish.InstagramPublishError as exc:
+        logger.warning("Native Instagram publish failed for business=%s: %s", business_id, exc)
+        if "no Instagram connection" in str(exc):
+            return (
+                "Error: not connected. Tell the client they need to connect Instagram first, then "
+                "call connect_instagram for them."
+            )
+        return (
+            f"Error: posting to Instagram failed ({exc}). Tell the client something went wrong -- "
+            "do NOT say it posted."
+        )
+    except Exception:
+        logger.exception("Native Instagram publish raised unexpectedly for business=%s", business_id)
+        return "Error: posting to Instagram failed unexpectedly. Tell the client something went wrong -- do NOT say it posted."
+
+    with get_session() as db:
+        gen_row = db.query(Generation).filter(Generation.id == last_generation_id).first()
+        gen_row.posted_to_instagram = True
+
+    # Same strong-accept-signal exemption as the classic "Post to
+    # Instagram" WhatsApp button -- see app/instagram.py.
+    from app.engine import learning
+    await learning.record_accepted_direction(business_id, last_generation_id, require_quality_threshold=False)
+
+    return "SUCCESS: posted directly to the client's Instagram. Let them know it's live -- don't over-describe it."
+
+
 async def execute_tool(
     name: str, args: dict, *, business_id: uuid.UUID, phone: str, ctx: BusinessContext,
     last_generation_id, current_image_bytes: bytes | None,
@@ -342,4 +445,8 @@ async def execute_tool(
         return _tool_save_brand_info(business_id, args)
     if name == "get_recent_creatives":
         return await _tool_get_recent_creatives(business_id, phone)
+    if name == "connect_instagram":
+        return await _tool_connect_instagram(business_id, phone)
+    if name == "post_to_instagram":
+        return await _tool_post_to_instagram(business_id, phone, last_generation_id, args)
     return f"Error: unknown tool '{name}'."
