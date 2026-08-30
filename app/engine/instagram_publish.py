@@ -6,14 +6,24 @@ That OAuth flow's SCOPES now includes instagram_content_publish alongside
 instagram_manage_insights specifically so this module can reuse the same
 token -- see that module's docstring.
 
-Deliberately NOT wired into anything yet:
-  - app/instagram.py (the "Post to Instagram" WhatsApp button) still posts
-    exclusively through the Make.com scenario, untouched by this module.
-  - Nothing else in the codebase calls publish_image()/publish_carousel()
-    below.
-This is additive groundwork for a possible future migration off Make.com,
-not a replacement -- a business only gets native publishing once something
-is explicitly wired to call into this module.
+Now reachable from TWO places, both calling the shared
+publish_latest_generation() below rather than duplicating its resolve/
+publish/mark-posted/record-learning logic:
+  - app/engine/agent_tools.py's post_to_instagram tool (agentic-beta
+    allowlisted numbers only).
+  - app/router.py's "post_to_instagram" global command (classic pipeline
+    -- every other business, added specifically so a Meta App Review
+    reviewer messaging from an arbitrary phone number can actually
+    exercise the instagram_content_publish grant; see that module's
+    handle_post_request() below).
+
+Still deliberately NOT touching, replacing, or interacting with
+app/instagram.py's existing "Post to Instagram" WhatsApp BUTTON flow,
+which keeps posting exclusively through the Make.com scenario exactly as
+before. Both paths can end up publishing the same delivered creative --
+whichever the client reaches first sets Generation.posted_to_instagram,
+and the other then correctly reports "already posted" instead of
+double-posting.
 
 Flow (per Meta's Content Publishing API):
   1. POST /{ig-user-id}/media creates a "container" -- a pending media
@@ -38,7 +48,8 @@ import httpx
 
 from app.config import settings
 from app.db import get_session
-from app.models import Business
+from app.models import Business, Generation
+from app.whatsapp.client import send_text
 
 logger = logging.getLogger("socioburp.engine.instagram_publish")
 
@@ -195,3 +206,94 @@ async def publish_carousel(business_id: uuid.UUID, image_urls: list[str], captio
 
     logger.info("Native Instagram carousel published for business=%s media_id=%s", business_id, media_id)
     return media_id
+
+
+async def publish_latest_generation(business_id: uuid.UUID, last_generation_id) -> dict:
+    """
+    Resolves a business's most recently delivered Generation (single image
+    or carousel) and native-publishes it -- the shared implementation
+    behind both callers described in this module's docstring, so the
+    resolve/publish/mark-posted/record-learning sequence exists in exactly
+    one place. Never raises; both callers just branch on the returned
+    status and phrase their own reply in whatever voice fits their
+    pipeline (plain WhatsApp text for the classic command, a tool_result
+    string for Claude to phrase itself for the agentic bot).
+
+    Returns {"status": ..., "detail": str | None}, status one of:
+    "nothing_to_post" (last_generation_id is None) | "not_found" (stale/
+    foreign id) | "already_posted" | "not_connected" | "failed" | "success".
+    """
+    if last_generation_id is None:
+        return {"status": "nothing_to_post", "detail": None}
+
+    with get_session() as db:
+        gen = db.query(Generation).filter(
+            Generation.id == last_generation_id,
+            Generation.business_id == business_id,  # never let a business post another's creative
+        ).first()
+        # Pulled into plain values while the session is open -- gen becomes
+        # unusable (DetachedInstanceError) once this block exits, same as
+        # app/instagram.py's handle_post_request().
+        gen_found = gen is not None
+        already_posted = gen.posted_to_instagram if gen else None
+        image_url = gen.image_url if gen else None
+        carousel_image_urls = gen.carousel_image_urls if gen else None
+        caption = gen.caption if gen else None
+        hashtags = gen.hashtags if gen else None
+
+    if not gen_found:
+        return {"status": "not_found", "detail": None}
+    if already_posted:
+        return {"status": "already_posted", "detail": None}
+
+    full_caption = f"{caption}\n\n{hashtags}"[:2200] if caption else ""
+
+    try:
+        if carousel_image_urls:
+            await publish_carousel(business_id, carousel_image_urls, caption=full_caption)
+        else:
+            await publish_image(business_id, image_url, caption=full_caption)
+    except InstagramPublishError as exc:
+        logger.warning("Native Instagram publish failed for business=%s: %s", business_id, exc)
+        if "no Instagram connection" in str(exc):
+            return {"status": "not_connected", "detail": None}
+        return {"status": "failed", "detail": str(exc)}
+    except Exception:
+        logger.exception("Native Instagram publish raised unexpectedly for business=%s", business_id)
+        return {"status": "failed", "detail": None}
+
+    with get_session() as db:
+        gen_row = db.query(Generation).filter(Generation.id == last_generation_id).first()
+        gen_row.posted_to_instagram = True
+
+    # Same strong-accept-signal exemption as app/instagram.py's Make.com
+    # button flow -- choosing to publish something publicly is a stronger
+    # signal than any quality score.
+    from app.engine import learning
+    await learning.record_accepted_direction(business_id, last_generation_id, require_quality_threshold=False)
+
+    return {"status": "success", "detail": None}
+
+
+async def handle_post_request(business_id: uuid.UUID, phone: str, last_generation_id) -> None:
+    """
+    Classic-pipeline entry point for the "post_to_instagram" global
+    command -- see app/router.py. Sends the client a plain WhatsApp text
+    reply itself (unlike agent_tools.py's version, there's no Claude in
+    this pipeline to phrase one).
+    """
+    result = await publish_latest_generation(business_id, last_generation_id)
+    status = result["status"]
+
+    if status == "nothing_to_post":
+        await send_text(phone, "There's nothing to post yet 🙏 Generate a creative first, then text 'post to instagram'.")
+    elif status == "not_found":
+        await send_text(phone, "Couldn't find that creative anymore 🙏 Please generate a new one.")
+    elif status == "already_posted":
+        await send_text(phone, "That one's already posted to Instagram ✅")
+    elif status == "not_connected":
+        await send_text(phone, "Your Instagram isn't connected yet 🙏 Text 'connect instagram' to set it up first.")
+    elif status == "success":
+        await send_text(phone, "Posted directly to your Instagram ✅")
+    else:  # "failed"
+        await send_text(phone, "Posting to Instagram failed 🙏 No credits affected — please try again.")

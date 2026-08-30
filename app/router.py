@@ -126,6 +126,7 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         convo = db.query(ConversationState).filter(ConversationState.business_id == biz_id).first()
         pending_carousel = convo.pending_carousel if convo else None
         pending_image_intent = convo.pending_image_intent if convo else None
+        last_generation_id = convo.last_generation_id if convo else None
 
     # --- Onboarding takes priority over everything else ---
     if onboarding_state != "done":
@@ -294,6 +295,22 @@ async def _process_message(biz_id: uuid.UUID, msg: IncomingMessage):
         if command == "connect_instagram":
             from app.instagram_insights_oauth import send_connect_link
             await send_connect_link(biz_id, msg.sender)
+            return
+        if command == "instagram_performance":
+            from app.engine.instagram_performance import send_performance_summary
+            await send_performance_summary(biz_id, msg.sender)
+            return
+        if command == "post_to_instagram":
+            # Additional, coexisting native-publish path (Meta's own
+            # Content Publishing API, via app/engine/instagram_publish.py)
+            # -- separate from the existing "Post to Instagram" WhatsApp
+            # BUTTON on a delivered creative, which still posts through
+            # the Make.com scenario via app/instagram.py, untouched. This
+            # is a TEXT command ("post this to instagram"), reachable by
+            # any business on the classic pipeline, not just agentic-beta
+            # numbers -- see app/engine/instagram_publish.py's docstring.
+            from app.engine.instagram_publish import handle_post_request
+            await handle_post_request(biz_id, msg.sender, last_generation_id)
             return
         # Classifier said GLOBAL_COMMAND but didn't name which one --
         # fail safe by falling through to the normal pipeline below

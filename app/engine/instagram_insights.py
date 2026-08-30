@@ -110,5 +110,44 @@ async def get_media_insights(
         return None
 
 
+async def get_recent_media(business_id: uuid.UUID, limit: int = 1) -> list[dict] | None:
+    """
+    The account's most recent published media (id, caption, timestamp,
+    permalink), fetched directly from Meta -- NOT resolved from our own
+    Generation rows. Generation.posted_to_instagram is just a boolean; it
+    never learns the real Instagram media id (the Make.com posting path in
+    app/instagram.py is a fire-and-forget webhook that gets nothing back,
+    and app/engine/instagram_publish.py's returned media id currently
+    isn't persisted anywhere either). This is the only reliable way today
+    to answer "what did they most recently post" for get_media_insights()
+    below -- it also naturally covers posts made outside SocioBurp
+    entirely, which is arguably more correct anyway.
+
+    Returns None if not connected / the call failed, [] if connected but
+    the account has no media yet.
+    """
+    connection = _get_connection(business_id)
+    if connection is None:
+        return None
+    ig_user_id, access_token = connection
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{GRAPH_BASE}/{ig_user_id}/media",
+                params={"fields": "id,caption,timestamp,permalink", "limit": limit, "access_token": access_token},
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "Instagram recent media fetch failed for business=%s: %s | %s",
+                business_id, resp.status_code, resp.text[:300],
+            )
+            return None
+        return resp.json().get("data", [])
+    except Exception:
+        logger.exception("Instagram recent media fetch raised for business=%s", business_id)
+        return None
+
+
 def is_connected(business_id: uuid.UUID) -> bool:
     return _get_connection(business_id) is not None

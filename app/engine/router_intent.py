@@ -59,10 +59,14 @@ Intents:
 - GREETING: a bare hello/hi with no actual request in it (any spelling: "hii", "heyy", "yo")
 - IDENTITY_QUESTION: asking whether Sakshi is a real person, an AI, or a bot
 - GLOBAL_COMMAND: asking for their credit balance, to top up / buy more credits,
-  to see their past generations/history, or to connect their Instagram for
-  performance tracking (reach/saves/engagement -- NOT the same as posting).
+  to see their past generations/history, to connect their Instagram for
+  performance tracking (reach/saves/engagement -- NOT the same as posting),
+  to check how their Instagram or their posts are doing/performing right
+  now, or to post/publish their most recently generated creative directly
+  to Instagram itself (NOT the same as connecting, and NOT just receiving
+  it on WhatsApp -- an explicit "post/publish/share this to Instagram").
   Also set "command" to exactly one of "credits" | "topup" | "history" |
-  "connect_instagram".
+  "connect_instagram" | "instagram_performance" | "post_to_instagram".
 - CAROUSEL_REQUEST: asking for a multi-image Instagram carousel -- a set/series
   of images, multiple slides, or a "collage" of several images meant to be
   posted together (any spelling of "carousel": "carasoul", "carsoul", etc.)
@@ -94,7 +98,7 @@ Intents:
   service, casual chat, or unclear. This is the safe default.
 
 Reply with JSON only, no other text:
-{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|NEW_GENERATION_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|"connect_instagram"|null}"""
+{"intent": "GREETING|IDENTITY_QUESTION|GLOBAL_COMMAND|CAROUSEL_REQUEST|NEW_GENERATION_REQUEST|LOGO_UPLOAD|CANCEL|OTHER", "command": "credits"|"topup"|"history"|"connect_instagram"|"instagram_performance"|"post_to_instagram"|null}"""
 
 
 async def classify(text: str | None) -> dict:
@@ -131,6 +135,11 @@ _BARE_GREETINGS = {"hi", "hey", "hello", "hii", "hiii", "heya", "hola", "yo"}
 _GLOBAL_COMMAND_WORDS = {
     "credits": "credits", "balance": "credits", "topup": "topup", "history": "history",
     "connect instagram": "connect_instagram", "connect ig": "connect_instagram",
+    "insights": "instagram_performance", "instagram insights": "instagram_performance",
+    "performance": "instagram_performance", "instagram performance": "instagram_performance",
+    "how am i doing": "instagram_performance",
+    "post to instagram": "post_to_instagram", "post this to instagram": "post_to_instagram",
+    "publish to instagram": "post_to_instagram", "share to instagram": "post_to_instagram",
 }
 _CANCEL_WORDS = {"cancel", "never mind", "nevermind", "skip", "stop"}
 _IDENTITY_QUESTION_PATTERNS = (

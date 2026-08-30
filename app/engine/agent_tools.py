@@ -20,16 +20,27 @@ Two exceptions to that "reuses the classic path" rule, both Instagram:
   - post_to_instagram does NOT reuse app/instagram.py's Make.com-based
     "Post to Instagram" button flow. It calls the newer, native
     app/engine/instagram_publish.py (Meta's own Content Publishing API)
-    instead -- a deliberate choice for agentic-beta specifically, not yet
-    exercised against a real account. If this needs to fall back to the
-    Make.com path later, that's a distinct, larger change, not a tweak
-    here.
+    instead, via that module's shared publish_latest_generation() -- the
+    exact same shared function backs app/router.py's classic-pipeline
+    "post_to_instagram" global command too, so this isn't agentic-beta-
+    exclusive despite living in this file. If this needs to fall back to
+    the Make.com path later, that's a distinct, larger change, not a
+    tweak here.
+
+check_instagram_performance reuses app/engine/instagram_insights.py's
+read client, previously built but never actually called from anywhere
+user-facing (a real gap for Meta's App Review of instagram_manage_insights
+-- reviewers want to see the permission's data rendered, not just the
+OAuth grant succeeding). Its "most recent post" metrics come from that
+module's get_recent_media(), which asks Meta directly rather than our own
+Generation rows -- Generation.posted_to_instagram is only a boolean, we
+never persist the real Instagram media id for a published post.
 """
 import logging
 import uuid
 
 from app.db import get_session
-from app.models import Business, BrandProfile, ConversationState, Generation
+from app.models import Business, BrandProfile, ConversationState
 from app import credits, payments, allowlist
 from app.engine import image_history
 from app.engine.context import BusinessContext
@@ -157,6 +168,17 @@ TOOLS = [
             "to post/publish/share something to Instagram -- never on your own initiative. If "
             "there's nothing delivered yet, or they haven't connected Instagram, this tool will "
             "tell you which -- don't guess."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "check_instagram_performance",
+        "description": (
+            "Look up the client's real Instagram performance: account-level reach/impressions/"
+            "profile views, plus engagement (saves/likes/comments) on their most recent post if "
+            "they have one. Use when they ask how their Instagram or their posts are doing/"
+            "performing. Requires them to have connected Instagram already -- if not, this tool "
+            "will tell you, and you should call connect_instagram instead."
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
@@ -362,62 +384,74 @@ async def _tool_connect_instagram(business_id: uuid.UUID, phone: str) -> str:
 
 
 async def _tool_post_to_instagram(business_id: uuid.UUID, phone: str, last_generation_id, args: dict) -> str:
-    if last_generation_id is None:
-        return "Error: there's nothing delivered yet to post. Generate a creative first, then post it."
-
-    with get_session() as db:
-        gen = db.query(Generation).filter(
-            Generation.id == last_generation_id,
-            Generation.business_id == business_id,
-        ).first()
-        # Pulled into plain values while the session is open -- see
-        # app/instagram.py's handle_post_request() for why (gen becomes
-        # unusable once this block exits).
-        gen_found = gen is not None
-        already_posted = gen.posted_to_instagram if gen else None
-        image_url = gen.image_url if gen else None
-        carousel_image_urls = gen.carousel_image_urls if gen else None
-        caption = gen.caption if gen else None
-        hashtags = gen.hashtags if gen else None
-
-    if not gen_found:
-        return "Error: couldn't find that creative anymore. Ask the client to generate a new one."
-    if already_posted:
-        return "Already posted: this creative is already live on Instagram. Let the client know."
-
-    full_caption = f"{caption}\n\n{hashtags}"[:2200] if caption else ""
-
     from app.engine import instagram_publish
-    try:
-        if carousel_image_urls:
-            await instagram_publish.publish_carousel(business_id, carousel_image_urls, caption=full_caption)
-        else:
-            await instagram_publish.publish_image(business_id, image_url, caption=full_caption)
-    except instagram_publish.InstagramPublishError as exc:
-        logger.warning("Native Instagram publish failed for business=%s: %s", business_id, exc)
-        if "no Instagram connection" in str(exc):
-            return (
-                "Error: not connected. Tell the client they need to connect Instagram first, then "
-                "call connect_instagram for them."
-            )
+
+    result = await instagram_publish.publish_latest_generation(business_id, last_generation_id)
+    status = result["status"]
+
+    if status == "nothing_to_post":
+        return "Error: there's nothing delivered yet to post. Generate a creative first, then post it."
+    if status == "not_found":
+        return "Error: couldn't find that creative anymore. Ask the client to generate a new one."
+    if status == "already_posted":
+        return "Already posted: this creative is already live on Instagram. Let the client know."
+    if status == "not_connected":
         return (
-            f"Error: posting to Instagram failed ({exc}). Tell the client something went wrong -- "
-            "do NOT say it posted."
+            "Error: not connected. Tell the client they need to connect Instagram first, then "
+            "call connect_instagram for them."
         )
-    except Exception:
-        logger.exception("Native Instagram publish raised unexpectedly for business=%s", business_id)
-        return "Error: posting to Instagram failed unexpectedly. Tell the client something went wrong -- do NOT say it posted."
-
-    with get_session() as db:
-        gen_row = db.query(Generation).filter(Generation.id == last_generation_id).first()
-        gen_row.posted_to_instagram = True
-
-    # Same strong-accept-signal exemption as the classic "Post to
-    # Instagram" WhatsApp button -- see app/instagram.py.
-    from app.engine import learning
-    await learning.record_accepted_direction(business_id, last_generation_id, require_quality_threshold=False)
+    if status == "failed":
+        detail = result.get("detail")
+        suffix = f" ({detail})" if detail else ""
+        return f"Error: posting to Instagram failed{suffix}. Tell the client something went wrong -- do NOT say it posted."
 
     return "SUCCESS: posted directly to the client's Instagram. Let them know it's live -- don't over-describe it."
+
+
+async def _tool_check_instagram_performance(business_id: uuid.UUID) -> str:
+    from app.engine import instagram_insights
+
+    if not instagram_insights.is_connected(business_id):
+        return (
+            "Error: not connected. Tell the client they need to connect Instagram first, then call "
+            "connect_instagram for them."
+        )
+
+    account = await instagram_insights.get_account_insights(business_id)
+    recent_media = await instagram_insights.get_recent_media(business_id, limit=1)
+
+    media_insights = None
+    media_info = recent_media[0] if recent_media else None
+    if media_info:
+        media_insights = await instagram_insights.get_media_insights(business_id, media_info["id"])
+
+    if account is None and recent_media is None:
+        return (
+            "Error: fetching Instagram performance data failed. Tell the client something went "
+            "wrong and you'll check again shortly -- do NOT make up or guess any numbers."
+        )
+
+    lines = [
+        "Real Instagram performance data below -- summarize it naturally and conversationally for "
+        "the client (don't dump raw numbers or field names verbatim, and don't invent any figure "
+        "not listed here):"
+    ]
+
+    if account and account.get("data"):
+        metrics = {m["name"]: m["values"][-1]["value"] for m in account["data"] if m.get("values")}
+        lines.append(f"Account-level (recent period): {metrics}")
+    else:
+        lines.append("Account-level insights: not available right now.")
+
+    if media_insights and media_insights.get("data"):
+        metrics = {m["name"]: m["values"][0]["value"] for m in media_insights["data"] if m.get("values")}
+        lines.append(f"Most recent post (posted {media_info.get('timestamp', 'recently')}): {metrics}")
+    elif media_info:
+        lines.append("Most recent post: found the post but its per-post metrics aren't available right now.")
+    elif recent_media == []:
+        lines.append("No posts on the account yet, so no per-post numbers to share.")
+
+    return "\n".join(lines)
 
 
 async def execute_tool(
@@ -449,4 +483,6 @@ async def execute_tool(
         return await _tool_connect_instagram(business_id, phone)
     if name == "post_to_instagram":
         return await _tool_post_to_instagram(business_id, phone, last_generation_id, args)
+    if name == "check_instagram_performance":
+        return await _tool_check_instagram_performance(business_id)
     return f"Error: unknown tool '{name}'."
