@@ -61,6 +61,11 @@ async def handle_message(msg: IncomingMessage):
             await send_recent_generations(biz_id, msg.sender)
             return
 
+        if text_lower in ("connect instagram", "instagram"):
+            from app.instagram_oauth import send_instagram_connect_link
+            await send_instagram_connect_link(biz_id, msg.sender)
+            return
+
         # --- Credit check before anything that costs money ---
         if credits.get_balance(biz_id) < 1:
             await payments.send_topup_options(

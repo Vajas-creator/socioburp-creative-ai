@@ -30,6 +30,7 @@ class Business(Base):
     brand_profile = relationship("BrandProfile", back_populates="business", uselist=False)
     generations = relationship("Generation", back_populates="business")
     conversation_state = relationship("ConversationState", back_populates="business", uselist=False)
+    instagram_connection = relationship("InstagramConnection", back_populates="business", uselist=False)
 
 
 class BrandProfile(Base):
@@ -88,3 +89,23 @@ class ConversationState(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
     business = relationship("Business", back_populates="conversation_state")
+
+
+class InstagramConnection(Base):
+    __tablename__ = "instagram_connections"
+
+    business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), primary_key=True)
+    ig_user_id = Column(String(50), nullable=False)  # Instagram professional account id
+    ig_username = Column(String(200))
+    page_id = Column(String(50), nullable=False)  # connected Facebook Page id
+    # Long-lived Page access token used for insights/publishing calls against
+    # ig_user_id. NOTE: stored as plaintext for MVP, matching this codebase's
+    # documented "ship first, harden later" posture elsewhere (see db.py's
+    # init_db() note) — encrypt at rest before handling real customer tokens
+    # at scale.
+    access_token = Column(Text, nullable=False)
+    scopes = Column(Text)  # comma-separated scopes requested at connect time
+    connected_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    business = relationship("Business", back_populates="instagram_connection")

@@ -45,6 +45,20 @@ class Settings:
     ALERT_TELEGRAM_TOKEN: str = os.environ.get("ALERT_TELEGRAM_TOKEN", "")
     ALERT_TELEGRAM_CHAT_ID: str = os.environ.get("ALERT_TELEGRAM_CHAT_ID", "")
 
+    # --- Instagram (Facebook Login for Business OAuth) ---
+    META_APP_ID: str = os.environ.get("META_APP_ID", "")
+    META_APP_SECRET: str = os.environ.get("META_APP_SECRET", "")
+    # Must exactly match a URI registered in Meta App Dashboard -> Facebook
+    # Login for Business -> Valid OAuth Redirect URIs. Set this to your real
+    # deployed callback URL, e.g. https://<service>.onrender.com/instagram/oauth/callback
+    META_OAUTH_REDIRECT_URI: str = os.environ.get("META_OAUTH_REDIRECT_URI", "")
+    META_GRAPH_API_VERSION: str = os.environ.get("META_GRAPH_API_VERSION", "v21.0")
+    # Gates the "app_review_demo" callback state — a reviewer-facing shortcut
+    # that completes the same real OAuth handshake but skips the WhatsApp
+    # notify/DB-save step and just renders a static success page. Leave this
+    # off outside of an active Meta App Review submission.
+    META_APP_REVIEW_DEMO_ENABLED: bool = os.environ.get("META_APP_REVIEW_DEMO_ENABLED", "false").lower() == "true"
+
     # --- Business rules ---
     SIGNUP_BONUS_CREDITS: int = int(os.environ.get("SIGNUP_BONUS_CREDITS", "20"))
     LOW_BALANCE_THRESHOLD: int = int(os.environ.get("LOW_BALANCE_THRESHOLD", "3"))

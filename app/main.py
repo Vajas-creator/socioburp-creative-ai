@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from app.whatsapp.webhook import router as whatsapp_router
 from app.payments import router as payments_router
+from app.instagram_oauth import router as instagram_router
 from app.db import init_db
 
 logging.basicConfig(
@@ -25,6 +26,7 @@ app = FastAPI(title="SocioBurp Creative AI")
 
 app.include_router(whatsapp_router, tags=["whatsapp"])
 app.include_router(payments_router, tags=["payments"])
+app.include_router(instagram_router, tags=["instagram"])
 
 
 @app.on_event("startup")

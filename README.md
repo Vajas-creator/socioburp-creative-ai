@@ -46,8 +46,39 @@ GitHub Actions run on every push/PR that touches the relevant path:
 - `app/credits.py` — append-only ledger, balance computed on read
 - `app/storage.py` — Cloudflare R2 upload helpers
 - `app/payments.py`, `app/engine/orchestrator.py` — stubs for Week 2/3
+- `app/instagram_oauth.py` — Instagram account linking via Facebook Login
+  for Business (see below)
+- `migrations/versions/0002_instagram_connections.py` — Alembic migration
+  for the Instagram connections table
 - `test_smoke.py` — local end-to-end test (SQLite, no real APIs) — proof the
   onboarding flow works before you deploy
+
+## Instagram account linking
+
+A WhatsApp user types **"connect instagram"** (or "instagram") -> the bot
+replies with a Facebook Login for Business OAuth link (state carries their
+phone number, same pattern as every other WhatsApp-triggered flow — no
+parallel session store) -> they authorize in their browser -> Meta
+redirects to `GET /instagram/oauth/callback` -> the backend exchanges the
+code for a long-lived Page access token, finds the connected Instagram
+professional account, saves it to the new `instagram_connections` table,
+and confirms over WhatsApp.
+
+Requires `META_APP_ID`, `META_APP_SECRET`, and `META_OAUTH_REDIRECT_URI`
+(see `.env.example`) — until all three are set, the bot replies that
+linking isn't available yet rather than sending a broken link.
+`META_OAUTH_REDIRECT_URI` must exactly match a URI registered in your Meta
+App Dashboard under Facebook Login for Business -> Valid OAuth Redirect
+URIs; it's read from the env var directly (not derived from a domain), so
+whatever you set in Render is automatically what the generated OAuth URLs
+use.
+
+There's also a `META_APP_REVIEW_DEMO_ENABLED` flag (default `false`) that,
+when turned on, activates a fixed `state=app_review_demo` callback path for
+Meta App Review: it completes the same real OAuth handshake but skips the
+WhatsApp notify/DB-save step and just renders a static success page, since
+a reviewer has no WhatsApp session in our system. Leave it off outside of
+an active review submission.
 
 ## Local setup
 

@@ -30,6 +30,14 @@ services:
         sync: false
       - key: R2_PUBLIC_BASE_URL
         sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_OAUTH_REDIRECT_URI
+        sync: false
+      - key: META_APP_REVIEW_DEMO_ENABLED
+        sync: false
 
   # Next.js auth system + dashboard — see web/ and web/README.md. Shares
   # the same Postgres instance as the FastAPI service above (own tables,
