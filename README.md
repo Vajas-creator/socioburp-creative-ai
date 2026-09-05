@@ -73,6 +73,17 @@ URIs; it's read from the env var directly (not derived from a domain), so
 whatever you set in Render is automatically what the generated OAuth URLs
 use.
 
+Also requires `META_LOGIN_CONFIG_ID` — the ID of a saved Login
+Configuration under Facebook Login for Business -> Configurations in the
+Meta App Dashboard. The Business-asset permissions this flow needs
+(`pages_show_list`, `business_management`, `instagram_manage_insights`,
+etc.) are gated behind a Configuration in current app setups; requesting
+`scope=` alone without a matching `config_id` silently downgrades the
+consent screen to `public_profile`-only. If it's unset, the OAuth link is
+still generated (so nothing crashes) but won't request real permissions —
+check the Render dashboard if Instagram linking's consent screen looks
+wrong.
+
 There's also a two-part gate for Meta App Review: `META_APP_REVIEW_DEMO_ENABLED`
 (default `false`) turns the reviewer path on at all, and `APP_REVIEW_DEMO_TOKEN`
 (a random secret you generate, e.g. `python3 -c "import uuid; print(uuid.uuid4())"`)

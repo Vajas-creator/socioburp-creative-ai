@@ -58,17 +58,25 @@ def instagram_oauth_configured() -> bool:
 
 
 def build_instagram_oauth_url(state: str) -> str:
-    """Build the Facebook Login for Business OAuth dialog URL."""
-    query = urlencode(
-        {
-            "client_id": settings.META_APP_ID,
-            "redirect_uri": settings.META_OAUTH_REDIRECT_URI,
-            "scope": IG_SCOPES,
-            "response_type": "code",
-            "state": state,
-        }
-    )
-    return f"https://www.facebook.com/{settings.META_GRAPH_API_VERSION}/dialog/oauth?{query}"
+    """
+    Build the Facebook Login for Business OAuth dialog URL. Includes
+    config_id (a saved Login Configuration) alongside scope when
+    META_LOGIN_CONFIG_ID is set — Business-asset permissions like
+    pages_show_list/business_management/instagram_manage_insights are
+    gated behind a Configuration in current app setups, and requesting
+    scope= without a matching config_id silently downgrades the consent
+    screen to public_profile-only.
+    """
+    params = {
+        "client_id": settings.META_APP_ID,
+        "redirect_uri": settings.META_OAUTH_REDIRECT_URI,
+        "scope": IG_SCOPES,
+        "response_type": "code",
+        "state": state,
+    }
+    if settings.META_LOGIN_CONFIG_ID:
+        params["config_id"] = settings.META_LOGIN_CONFIG_ID
+    return f"https://www.facebook.com/{settings.META_GRAPH_API_VERSION}/dialog/oauth?{urlencode(params)}"
 
 
 def build_app_review_demo_url() -> str:

@@ -53,6 +53,15 @@ class Settings:
     # deployed callback URL, e.g. https://<service>.onrender.com/instagram/oauth/callback
     META_OAUTH_REDIRECT_URI: str = os.environ.get("META_OAUTH_REDIRECT_URI", "")
     META_GRAPH_API_VERSION: str = os.environ.get("META_GRAPH_API_VERSION", "v21.0")
+    # ID of a saved Login Configuration under Facebook Login for Business ->
+    # Configurations in the Meta App Dashboard. Business-asset permissions
+    # (pages_show_list, business_management, instagram_manage_insights, etc.)
+    # are gated behind a Configuration in current app setups — a raw scope=
+    # list without a matching config_id gets silently downgraded to
+    # public_profile-only consent. Optional only in the sense that the app
+    # won't crash without it; Instagram linking won't request real
+    # permissions without it.
+    META_LOGIN_CONFIG_ID: str = os.environ.get("META_LOGIN_CONFIG_ID", "")
     # Gates the "app_review_demo" callback state — a reviewer-facing shortcut
     # that completes the same real OAuth handshake but skips the WhatsApp
     # notify/DB-save step and just renders a static success page. Leave this

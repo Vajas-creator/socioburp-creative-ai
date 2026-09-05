@@ -36,6 +36,8 @@ services:
         sync: false
       - key: META_OAUTH_REDIRECT_URI
         sync: false
+      - key: META_LOGIN_CONFIG_ID
+        sync: false
       - key: META_APP_REVIEW_DEMO_ENABLED
         sync: false
       - key: APP_REVIEW_DEMO_TOKEN
