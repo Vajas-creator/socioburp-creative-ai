@@ -58,6 +58,12 @@ class Settings:
     # notify/DB-save step and just renders a static success page. Leave this
     # off outside of an active Meta App Review submission.
     META_APP_REVIEW_DEMO_ENABLED: bool = os.environ.get("META_APP_REVIEW_DEMO_ENABLED", "false").lower() == "true"
+    # Inner gate alongside the flag above: the demo state alone isn't enough
+    # to reach the reviewer branch, it must also carry this exact secret
+    # (embedded in the OAuth `state` value — see app/instagram_oauth.py for
+    # why it can't just be a sibling query param). Generate with e.g.
+    # `python3 -c "import uuid; print(uuid.uuid4())"`.
+    APP_REVIEW_DEMO_TOKEN: str = os.environ.get("APP_REVIEW_DEMO_TOKEN", "")
 
     # --- Business rules ---
     SIGNUP_BONUS_CREDITS: int = int(os.environ.get("SIGNUP_BONUS_CREDITS", "20"))

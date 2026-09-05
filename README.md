@@ -73,12 +73,19 @@ URIs; it's read from the env var directly (not derived from a domain), so
 whatever you set in Render is automatically what the generated OAuth URLs
 use.
 
-There's also a `META_APP_REVIEW_DEMO_ENABLED` flag (default `false`) that,
-when turned on, activates a fixed `state=app_review_demo` callback path for
-Meta App Review: it completes the same real OAuth handshake but skips the
-WhatsApp notify/DB-save step and just renders a static success page, since
-a reviewer has no WhatsApp session in our system. Leave it off outside of
-an active review submission.
+There's also a two-part gate for Meta App Review: `META_APP_REVIEW_DEMO_ENABLED`
+(default `false`) turns the reviewer path on at all, and `APP_REVIEW_DEMO_TOKEN`
+(a random secret you generate, e.g. `python3 -c "import uuid; print(uuid.uuid4())"`)
+is required alongside it — knowing the fixed `app_review_demo` state string
+isn't enough on its own. The token travels inside the OAuth `state` value
+itself rather than as a separate query param, since Meta's redirect only
+reliably round-trips `code` and `state`. Generate the one-off reviewer link
+with `app.instagram_oauth.build_app_review_demo_url()` (raises if the token
+isn't set) and paste it into the "Instructions to reproduce" field — it
+completes the same real OAuth handshake but skips the WhatsApp notify/DB-save
+step and just renders a static success page, since a reviewer has no
+WhatsApp session in our system. Leave both env vars unset outside of an
+active review submission.
 
 ## Local setup
 

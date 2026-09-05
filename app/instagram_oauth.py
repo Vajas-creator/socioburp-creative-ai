@@ -12,6 +12,7 @@ WhatsApp — mirroring the existing onboarding/payments modules' pattern of
 Docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login
 """
 import logging
+import secrets
 from urllib.parse import urlencode
 
 import httpx
@@ -36,7 +37,14 @@ IG_SCOPES = (
 )
 
 WA_STATE_PREFIX = "wa:"
-APP_REVIEW_DEMO_STATE = "app_review_demo"
+# The reviewer-demo secret travels inside `state`, not as a sibling query
+# param: Meta's OAuth dialog only reliably round-trips `code` and `state`
+# back to the registered redirect_uri. Appending our own extra params to
+# redirect_uri at authorize-request time either gets stripped or, in
+# stricter Facebook Login product modes, rejected outright as a
+# redirect_uri mismatch — so `state` is the one place we can safely smuggle
+# app-defined data through the whole trip.
+APP_REVIEW_DEMO_STATE_PREFIX = "app_review_demo:"
 
 
 class InstagramOAuthError(Exception):
@@ -61,6 +69,34 @@ def build_instagram_oauth_url(state: str) -> str:
         }
     )
     return f"https://www.facebook.com/{settings.META_GRAPH_API_VERSION}/dialog/oauth?{query}"
+
+
+def build_app_review_demo_url() -> str:
+    """
+    One-off link to hand to a Meta App Reviewer (paste into the "Instructions
+    to reproduce" field). Requires META_APP_REVIEW_DEMO_ENABLED=true and
+    APP_REVIEW_DEMO_TOKEN to be set — raises otherwise, since a demo link
+    generated without a real token would just 404 at the reviewer.
+    """
+    if not settings.APP_REVIEW_DEMO_TOKEN:
+        raise InstagramOAuthError(
+            "APP_REVIEW_DEMO_TOKEN is not configured; set it before generating a reviewer link."
+        )
+    return build_instagram_oauth_url(
+        state=f"{APP_REVIEW_DEMO_STATE_PREFIX}{settings.APP_REVIEW_DEMO_TOKEN}"
+    )
+
+
+def _demo_access_allowed(state: str) -> bool:
+    """True only if the demo flag is on, a real token is configured, the
+    state carries the demo prefix, AND the embedded token matches — the
+    fixed prefix string alone is never sufficient."""
+    if not settings.META_APP_REVIEW_DEMO_ENABLED or not settings.APP_REVIEW_DEMO_TOKEN:
+        return False
+    if not state.startswith(APP_REVIEW_DEMO_STATE_PREFIX):
+        return False
+    provided = state[len(APP_REVIEW_DEMO_STATE_PREFIX):]
+    return secrets.compare_digest(provided, settings.APP_REVIEW_DEMO_TOKEN)
 
 
 async def send_instagram_connect_link(business_id, phone: str) -> None:
@@ -190,8 +226,8 @@ async def instagram_oauth_callback(code: str, state: str):
             )
         return _html(f"<h2>&#9888; Could not connect Instagram</h2><p>{e}</p>")
 
-    if state == APP_REVIEW_DEMO_STATE:
-        if not settings.META_APP_REVIEW_DEMO_ENABLED:
+    if state.startswith(APP_REVIEW_DEMO_STATE_PREFIX):
+        if not _demo_access_allowed(state):
             return _html("<h2>&#9888; This link is not currently active.</h2>")
         # Reviewer path — the OAuth handshake above is real (the reviewer's
         # own account was really authorized), but nothing is persisted and
