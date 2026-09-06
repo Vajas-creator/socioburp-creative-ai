@@ -189,6 +189,29 @@ async def _find_ig_business_account(long_lived_user_token: str) -> dict | None:
         resp.raise_for_status()
         pages = resp.json().get("data", [])
 
+        # Diagnostic: this is the one thing that disambiguates "no Pages
+        # granted at all" from "Page granted but instagram_business_account
+        # missing from the response" from "wrong IG account linked" -- three
+        # very different root causes that otherwise all collapse into the
+        # same generic "No linked Instagram Business account found" message
+        # below. Deliberately excludes each page's access_token (that field
+        # is a live credential; logging it would leak a real Page token into
+        # Render's log storage). Remove once the "sociobiurp" report is
+        # diagnosed -- this isn't meant to be permanent.
+        logger.info(
+            "Instagram Insights /me/accounts returned %d page(s): %s",
+            len(pages),
+            [
+                {
+                    "id": p.get("id"),
+                    "name": p.get("name"),
+                    "has_instagram_business_account": "instagram_business_account" in p,
+                    "instagram_business_account": p.get("instagram_business_account"),
+                }
+                for p in pages
+            ],
+        )
+
     for page in pages:
         ig_account = page.get("instagram_business_account")
         if ig_account and ig_account.get("id"):
