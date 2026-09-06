@@ -57,6 +57,7 @@ generated and sent to that business's own WhatsApp number is usable.
 """
 import hashlib
 import hmac
+import json
 import logging
 import time
 import urllib.parse
@@ -243,6 +244,8 @@ async def oauth_start(token: str):
         "state": token,  # re-verified as-is on callback -- same signed value, still within its TTL
         "scope": SCOPES,
         "response_type": "code",
+        "display": "page",
+        "extras": json.dumps({"setup": {"channel": "IG_API_ONBOARDING"}}),
     }
     return RedirectResponse(f"{AUTH_DIALOG_BASE}?{urllib.parse.urlencode(params)}")
 
