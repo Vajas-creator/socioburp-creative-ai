@@ -244,6 +244,8 @@ async def oauth_start(token: str):
         "state": token,  # re-verified as-is on callback -- same signed value, still within its TTL
         "scope": SCOPES,
         "response_type": "code",
+        "display": "page",
+        "extras": json.dumps({"setup": {"channel": "IG_API_ONBOARDING"}}),
     }
     return RedirectResponse(f"{AUTH_DIALOG_BASE}?{urllib.parse.urlencode(params)}")
 
