@@ -245,8 +245,8 @@ async def oauth_start(token: str):
         "scope": SCOPES,
         "response_type": "code",
     }
-  if settings.META_LOGIN_CONFIG_ID:
-      params["config_id"] = settings.META_LOGIN_CONFIG_ID
+    if settings.META_LOGIN_CONFIG_ID:
+        params["config_id"] = settings.META_LOGIN_CONFIG_ID
     return RedirectResponse(f"{AUTH_DIALOG_BASE}?{urllib.parse.urlencode(params)}")
 
 
