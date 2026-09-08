@@ -67,6 +67,13 @@ class Settings:
     # Must exactly match a Valid OAuth Redirect URI configured on the Meta
     # app, e.g. https://<your-render-url>/oauth/instagram/callback
     META_OAUTH_REDIRECT_URI: str = os.environ.get("META_OAUTH_REDIRECT_URI", "")
+    # Facebook Login for Business "Configuration" ID. Required for business-
+    # asset scopes (pages_show_list, instagram_manage_insights,
+    # business_management) -- without it Meta silently limits consent to
+    # public_profile only, so /me/accounts returns no pages ("No Instagram
+    # account found"). Meta App Dashboard -> Facebook Login for Business ->
+    # Configurations.
+    META_LOGIN_CONFIG_ID: str = os.environ.get("META_LOGIN_CONFIG_ID", "")
 
     # --- Meta ad account partner access (ads engine, Phase 2) ---
     # SocioBurp's OWN Business Manager ID -- the "agency" business that
